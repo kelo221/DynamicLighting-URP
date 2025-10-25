@@ -1,4 +1,5 @@
-﻿using UnityEditor;
+﻿using System.Collections.Generic;
+using UnityEditor;
 using UnityEngine;
 
 namespace AlpacaIT.DynamicLighting.Editor
@@ -13,7 +14,29 @@ namespace AlpacaIT.DynamicLighting.Editor
         {
             SuggestPresenceOfDynamicLightManager();
 
-            base.OnGUI(materialEditor, properties);
+            var props = new List<MaterialProperty>(properties);
+            var propColor = properties.Find("_Color");
+            var propMainTex = properties.Find("_MainTex");
+            var propEmissionColor = properties.Find("_EmissionColor");
+            var propEmissionMap = properties.Find("_EmissionMap");
+
+            // combine main texture with color.
+            materialEditor.Combine(props, propMainTex, propColor);
+
+            // combine emission texture with color.
+            materialEditor.Combine(props, propEmissionMap, propEmissionColor, () =>
+            {
+                if (materialEditor.MaterialKeywordCheckbox("_EMISSION", "Emission"))
+                    materialEditor.TexturePropertyWithHDRColor(new GUIContent("Color"), propEmissionMap, propEmissionColor, false);
+            });
+
+            // combine main texture only rendering scale and offset properties.
+            materialEditor.Combine(props, propMainTex, () =>
+                materialEditor.TextureScaleOffsetProperty(propMainTex)
+            );
+
+            // render everything else the default way.
+            base.OnGUI(materialEditor, props.ToArray());
         }
 
         /// <summary>

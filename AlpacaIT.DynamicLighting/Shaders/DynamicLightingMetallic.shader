@@ -13,6 +13,8 @@ Shader "Dynamic Lighting/Metallic"
         _BumpScale("Normal scale", Float) = 1
         [NoScaleOffset] _OcclusionMap("Occlusion", 2D) = "white" {}
         _OcclusionStrength("Occlusion strength", Range(0,1)) = 0.75
+        [HDR] _EmissionColor("Emission Color", Color) = (0,0,0)
+        [NoScaleOffset] _EmissionMap("Emission (RGB)", 2D) = "white" {}
     }
     
     CustomEditor "AlpacaIT.DynamicLighting.Editor.MetallicShaderGUI"
@@ -35,6 +37,7 @@ Shader "Dynamic Lighting/Metallic"
             #pragma multi_compile __ DYNAMIC_LIGHTING_DYNAMIC_GEOMETRY_DISTANCE_CUBES
             #pragma multi_compile multi_compile_fwdbase
             #pragma shader_feature METALLIC_TEXTURE_UNASSIGNED
+            #pragma shader_feature _EMISSION
 
             #include "UnityCG.cginc"
             #include "DynamicLighting.cginc"
@@ -75,6 +78,11 @@ Shader "Dynamic Lighting/Metallic"
             float _BumpScale;
             float _OcclusionStrength;
 
+            #if _EMISSION
+                sampler2D _EmissionMap;
+                float4 _EmissionColor;
+            #endif
+
             v2f vert (appdata v)
             {
                 v2f o;
@@ -109,7 +117,7 @@ Shader "Dynamic Lighting/Metallic"
             DYNLIT_FRAGMENT_FUNCTION
             {
                 // material parameters
-                float3 albedo = tex2D(_MainTex, i.uv0).rgb * _Color.rgb * i.color;
+                float3 albedo = tex2D(_MainTex, i.uv0).rgb * _Color.rgb * i.color.rgb;
                 
             #if METALLIC_TEXTURE_UNASSIGNED
                 float metallic = _Metallic;
@@ -165,6 +173,11 @@ Shader "Dynamic Lighting/Metallic"
                 float3 ambient = kD * albedo * (unity_lightmap_color + dynamic_ambient_color);
                 float3 color = (ambient + Lo) * lerp(1.0, ao, _OcclusionStrength) + specular;
                 
+                // sample the emission map, add after lighting calculations.
+                #if _EMISSION
+                    color.rgb += tex2D(_EmissionMap, i.uv0).rgb * _EmissionColor.rgb;
+                #endif
+
                 // apply fog.
                 UNITY_APPLY_FOG(i.fogCoord, color);
                 return float4(color, 1.0);
@@ -247,6 +260,23 @@ Shader "Dynamic Lighting/Metallic"
                 DYNLIT_FRAGMENT_UNLIT
 
             #endif
+            ENDCG
+        }
+
+        Pass
+        {
+            Name "FORWARD_DELTA"
+			Tags { "LightMode" = "ForwardAdd" }
+			Blend One One
+			ZWrite Off
+
+            CGPROGRAM
+            #pragma target 3.0
+            #pragma vertex vert
+            #pragma fragment frag
+            #pragma multi_compile_fog
+            #pragma multi_compile_fwdadd_fullshadows
+            #include "GenerateForwardAddMetallic.cginc"
             ENDCG
         }
     }
