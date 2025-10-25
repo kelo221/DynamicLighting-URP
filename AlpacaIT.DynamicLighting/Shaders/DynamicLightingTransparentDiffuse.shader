@@ -181,5 +181,123 @@ Shader "Dynamic Lighting/Transparent"
 			ENDCG
 		}
     }
+    SubShader
+    {
+        Tags { "Queue"="Transparent" "IgnoreProjector"="True" "RenderType"="Transparent" "RenderPipeline" = "UniversalPipeline" }
+        LOD 100
+
+        Pass
+        {
+            Name "UniversalForward"
+            Blend SrcAlpha OneMinusSrcAlpha
+            ZWrite Off
+
+            HLSLPROGRAM
+            #pragma target 4.5
+            #pragma vertex vert
+            #pragma fragment frag
+            #pragma multi_compile_fog
+            #pragma multi_compile __ DYNAMIC_LIGHTING_QUALITY_LOW DYNAMIC_LIGHTING_QUALITY_HIGH DYNAMIC_LIGHTING_INTEGRATED_GRAPHICS
+            #pragma multi_compile __ DYNAMIC_LIGHTING_LIT
+            #pragma multi_compile __ DYNAMIC_LIGHTING_BVH
+            #pragma multi_compile __ DYNAMIC_LIGHTING_BOUNCE
+            #pragma multi_compile __ DYNAMIC_LIGHTING_DYNAMIC_GEOMETRY_DISTANCE_CUBES
+            #pragma shader_feature _EMISSION
+
+            #include "UnityCG.cginc"
+            #include "DynamicLighting.cginc"
+
+            struct appdata
+            {
+                float4 vertex : POSITION;
+                float3 normal : NORMAL;
+                float2 uv0 : TEXCOORD0;
+                float2 uv1 : TEXCOORD1;
+                float4 color : COLOR;
+            };
+
+            struct v2f
+            {
+                float2 uv0 : TEXCOORD0;
+                float2 uv1 : TEXCOORD1;
+                float2 uv2 : TEXCOORD5;
+                UNITY_FOG_COORDS(4)
+                float4 vertex : SV_POSITION;
+                float4 color : COLOR;
+                float3 world : TEXCOORD2;
+                float3 normal : TEXCOORD3;
+            };
+
+            sampler2D _MainTex;
+            float4 _MainTex_ST;
+            float4 _Color;
+
+            #if _EMISSION
+                sampler2D _EmissionMap;
+                float4 _EmissionColor;
+            #endif
+
+            v2f vert (appdata v)
+            {
+                v2f o;
+                o.vertex = UnityObjectToClipPos(v.vertex);
+                o.uv0 = TRANSFORM_TEX(v.uv0, _MainTex);
+                o.uv1 = (v.uv1 - dynamic_lighting_unity_LightmapST.zw) * dynamic_lighting_unity_LightmapST.xy;
+                o.uv2 = v.uv1 * unity_LightmapST.xy + unity_LightmapST.zw;
+                o.color = v.color;
+                o.normal = UnityObjectToWorldNormal(v.normal);
+                o.world = mul(unity_ObjectToWorld, v.vertex).xyz;
+                UNITY_TRANSFER_FOG(o,o.vertex);
+                return o;
+            }
+
+            #if DYNAMIC_LIGHTING_LIT
+
+            #define DYNLIT_FRAGMENT_LIGHT_OUT_PARAMETERS inout float3 light_final
+            #define DYNLIT_FRAGMENT_LIGHT_IN_PARAMETERS light_final
+
+            DYNLIT_FRAGMENT_FUNCTION
+            {
+                float3 light_final = dynamic_ambient_color;
+                
+                DYNLIT_FRAGMENT_INTERNAL
+                
+                #if LIGHTMAP_ON
+                    float3 unity_lightmap_color = DecodeLightmap(UNITY_SAMPLE_TEX2D(unity_Lightmap, i.uv2));
+                #else
+                    float3 unity_lightmap_color = float3(0.0, 0.0, 0.0);
+                #endif
+
+                float4 col = tex2D(_MainTex, i.uv0) * _Color * float4(light_final + unity_lightmap_color, 1) * i.color;
+                
+                #if _EMISSION
+                    col.rgb += tex2D(_EmissionMap, i.uv0).rgb * _EmissionColor.rgb;
+                #endif
+
+                UNITY_APPLY_FOG(i.fogCoord, col);
+                
+                return col;
+            }
+            
+            DYNLIT_FRAGMENT_LIGHT
+            {
+                #define GENERATE_NORMAL i.normal
+                #include "GenerateLightProcessor.cginc"
+                
+                #if defined(DYNAMIC_LIGHTING_BOUNCE) && !defined(DYNAMIC_LIGHTING_INTEGRATED_GRAPHICS)
+                    light_final += (light.color * attenuation * NdotL * map) + (light.bounceColor * attenuation * bounce);
+                #else
+                    light_final += (light.color * attenuation * NdotL * map);
+                #endif
+            }
+
+            #else
+
+                DYNLIT_FRAGMENT_UNLIT
+
+            #endif
+            ENDHLSL
+        }
+    }
     Fallback "Legacy Shaders/Transparent/Diffuse"
 }
