@@ -114,7 +114,7 @@ else if (bvhLightIndex != -1)
 #ifdef DYNAMIC_LIGHTING_DYNAMIC_GEOMETRY_DISTANCE_CUBES
     map = sample_distance_cube_trilinear(bvhLightIndex, i.world, light.position);
 #else
-    map = sample_distance_cube_angular(bvhLightIndex, light_distanceSqr, light_direction, i.normal, NdotL_original);
+    map = sample_distance_cube_angular(bvhLightIndex, light_distanceSqr, light_direction, GENERATE_NORMAL, NdotL_original);
 #endif
 }
 #endif
