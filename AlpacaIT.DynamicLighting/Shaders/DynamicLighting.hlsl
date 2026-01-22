@@ -1,35 +1,24 @@
 #ifndef DYNAMIC_LIGHTING_INCLUDED
 #define DYNAMIC_LIGHTING_INCLUDED
 
-// URP Dynamic Lighting Include
-// Note: The multi_compile pragmas must be in the shader file itself, not here.
-// Required pragmas in shader:
+// =============================================================================
+// URP Dynamic Lighting Include (Henry00IS/DynamicLighting)
+// =============================================================================
+// This is the URP HLSL port of the Dynamic Lighting system.
+// It does NOT use Unity's lighting system - it has its own precomputed shadow
+// data (distance cubes) and custom light loop.
+//
+// Required multi_compile pragmas in your shader:
 //   #pragma multi_compile __ DYNAMIC_LIGHTING_QUALITY_LOW DYNAMIC_LIGHTING_QUALITY_HIGH DYNAMIC_LIGHTING_INTEGRATED_GRAPHICS
 //   #pragma multi_compile __ DYNAMIC_LIGHTING_LIT
 //   #pragma multi_compile __ DYNAMIC_LIGHTING_BVH
 //   #pragma multi_compile __ DYNAMIC_LIGHTING_BOUNCE
 //   #pragma multi_compile __ DYNAMIC_LIGHTING_DYNAMIC_GEOMETRY_DISTANCE_CUBES DYNAMIC_LIGHTING_DYNAMIC_GEOMETRY_ANGULAR
+// =============================================================================
 
+// Only include URP Core for transforms and math - we don't use Unity's lighting
 #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
-#include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Lighting.hlsl"
 #include "Packages/de.alpacait.dynamiclighting/AlpacaIT.DynamicLighting/Shaders/Internal/Common.hlsl"
-
-// URP Lightmap sampling helper (matches BIRP's DecodeLightmap behavior)
-// Named differently to avoid conflict with URP's built-in SampleLightmap
-#if defined(LIGHTMAP_ON)
-float3 DynamicLighting_SampleUnityLightmap(float2 lightmapUV, float3 normalWS)
-{
-    #ifdef UNITY_LIGHTMAP_FULL_HDR
-        bool encodedLightmap = false;
-    #else
-        bool encodedLightmap = true;
-    #endif
-
-    float4 decodeInstructions = float4(LIGHTMAP_HDR_MULTIPLIER, LIGHTMAP_HDR_EXPONENT, 0.0h, 0.0h);
-    float4 transformCoords = float4(1, 1, 0, 0);
-    return SampleSingleLightmap(TEXTURE2D_ARGS(unity_Lightmap, samplerunity_Lightmap), lightmapUV, transformCoords, encodedLightmap, decodeInstructions);
-}
-#endif
 
 // macros to name the general purpose variables.
 #define light_cutoff gpFloat1

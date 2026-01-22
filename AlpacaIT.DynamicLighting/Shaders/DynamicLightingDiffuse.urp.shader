@@ -48,13 +48,6 @@ Shader "Dynamic Lighting/URP/Diffuse"
             #pragma multi_compile __ DYNAMIC_LIGHTING_BVH
             #pragma multi_compile __ DYNAMIC_LIGHTING_BOUNCE
             #pragma multi_compile __ DYNAMIC_LIGHTING_DYNAMIC_GEOMETRY_DISTANCE_CUBES DYNAMIC_LIGHTING_DYNAMIC_GEOMETRY_ANGULAR
-            
-            // URP keywords
-            #pragma multi_compile _ LIGHTMAP_ON
-            #pragma multi_compile _ _MAIN_LIGHT_SHADOWS _MAIN_LIGHT_SHADOWS_CASCADE _MAIN_LIGHT_SHADOWS_SCREEN
-            #pragma multi_compile _ _ADDITIONAL_LIGHTS_VERTEX _ADDITIONAL_LIGHTS
-            #pragma multi_compile _ _ADDITIONAL_LIGHT_SHADOWS
-            #pragma multi_compile _ _SHADOWS_SOFT
 
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
             #include "Packages/de.alpacait.dynamiclighting/AlpacaIT.DynamicLighting/Shaders/DynamicLighting.hlsl"
@@ -72,10 +65,9 @@ Shader "Dynamic Lighting/URP/Diffuse"
             struct Varyings
             {
                 float2 uv : TEXCOORD0;
-                float2 uv1 : TEXCOORD1;
-                // Use noperspective to prevent precision issues in shadow UV sampling
-                // This fixes zebra stripe artifacts by ensuring consistent UV interpolation
-                noperspective float2 uv2 : TEXCOORD5;
+                // Dynamic Lighting shadow UV - pixel coordinates for shadow bit sampling
+                // Use noperspective to prevent precision issues causing zebra stripe artifacts
+                noperspective float2 uv1 : TEXCOORD1;
                 float4 positionCS : SV_POSITION;
                 float4 color : COLOR;
                 float3 positionWS : TEXCOORD2;
@@ -113,13 +105,10 @@ Shader "Dynamic Lighting/URP/Diffuse"
                 output.normalWS = TransformObjectToWorldNormal(input.normalOS);
                 output.uv = TRANSFORM_TEX(input.uv, _MainTex);
                 
-                // Unity baked lightmap UV
-                output.uv1 = input.uv1 * unity_LightmapST.xy + unity_LightmapST.zw;
-                
                 // Dynamic Lighting shadow UV - pixel coordinates for shadow bit sampling
-                // IMPORTANT: Match BIRP order exactly to prevent zebra stripes
-                // The formula: (uv1 - offset) * scale converts to pixel space
-                output.uv2 = (input.uv1 - dynamic_lighting_unity_LightmapST.zw) * dynamic_lighting_unity_LightmapST.xy;
+                // The formula: (uv1 - offset) * scale converts UV1 to pixel space
+                // This matches the BIRP implementation exactly
+                output.uv1 = (input.uv1 - dynamic_lighting_unity_LightmapST.zw) * dynamic_lighting_unity_LightmapST.xy;
 
                 output.color = input.color;
                 output.fogCoord = ComputeFogFactor(output.positionCS.z);
@@ -136,13 +125,14 @@ Shader "Dynamic Lighting/URP/Diffuse"
             void ProcessLight(DynamicLight light, Varyings i_original, DynamicTriangle dynamic_triangle, int bvhLightIndex, bool is_front_face, inout float3 light_final)
             {
                 // Create a proxy struct matching what LightProcessor.hlsl expects
+                // LightProcessor uses: i.world (world position), i.uv1 (shadow pixel coords)
                 struct v2f_proxy {
                     float3 world;
                     float2 uv1;
                 };
                 v2f_proxy i_proxy;
                 i_proxy.world = i_original.positionWS;
-                i_proxy.uv1 = i_original.uv2;  // Dynamic lighting UV (pixel coords for shadow sampling)
+                i_proxy.uv1 = i_original.uv1;  // Dynamic lighting UV (pixel coords for shadow sampling)
                 
                 #define i i_proxy
                 #define GENERATE_NORMAL i_original.normalWS
@@ -215,19 +205,12 @@ Shader "Dynamic Lighting/URP/Diffuse"
                 }
                 #endif
 
-                // Sample Unity baked lightmap if available
-                #if LIGHTMAP_ON
-                    float3 unity_lightmap_color = DynamicLighting_SampleUnityLightmap(i_original.uv1, i_original.normalWS);
-                #else
-                    float3 unity_lightmap_color = float3(0.0, 0.0, 0.0);
-                #endif
-
                 #ifdef DYNAMIC_LIGHTING_SCENE_VIEW_MODE_LIGHTING
-                    // Scene view lighting mode - show lighting only
-                    float4 col = float4(1, 1, 1, SAMPLE_TEXTURE2D(_MainTex, sampler_MainTex, i_original.uv).a) * float4(1, 1, 1, _Color.a) * float4(light_final + unity_lightmap_color, 1) * float4(1, 1, 1, i_original.color.a);
+                    // Scene view lighting mode - show lighting only (white albedo)
+                    float4 col = float4(1, 1, 1, SAMPLE_TEXTURE2D(_MainTex, sampler_MainTex, i_original.uv).a) * float4(1, 1, 1, _Color.a) * float4(light_final, 1) * float4(1, 1, 1, i_original.color.a);
                 #else
-                    // Normal rendering
-                    float4 col = SAMPLE_TEXTURE2D(_MainTex, sampler_MainTex, i_original.uv) * _Color * float4(light_final + unity_lightmap_color, 1) * i_original.color;
+                    // Normal rendering: albedo * color * lighting * vertex color
+                    float4 col = SAMPLE_TEXTURE2D(_MainTex, sampler_MainTex, i_original.uv) * _Color * float4(light_final, 1) * i_original.color;
                 #endif
                 
                 #ifdef _ALPHATEST_ON
