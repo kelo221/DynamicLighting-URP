@@ -66,8 +66,7 @@ Shader "Dynamic Lighting/URP/Diffuse"
             {
                 float2 uv : TEXCOORD0;
                 // Dynamic Lighting shadow UV - pixel coordinates for shadow bit sampling
-                // Use noperspective to prevent precision issues causing zebra stripe artifacts
-                noperspective float2 uv1 : TEXCOORD1;
+                float2 uv1 : TEXCOORD1;
                 float4 positionCS : SV_POSITION;
                 float4 color : COLOR;
                 float3 positionWS : TEXCOORD2;
