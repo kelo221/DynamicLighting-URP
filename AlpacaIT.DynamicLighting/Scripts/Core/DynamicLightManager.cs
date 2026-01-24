@@ -934,18 +934,30 @@ namespace AlpacaIT.DynamicLighting
 
             if (dynamicLightsBuffer == null || !dynamicLightsBuffer.IsValid())
             {
+                // Release the old buffer if it exists but is invalid
+                if (dynamicLightsBuffer != null && !dynamicLightsBuffer.IsValid())
+                    dynamicLightsBuffer.Release();
+                    
                 dynamicLightsBuffer = new ComputeBuffer(1, dynamicLightStride, ComputeBufferType.Default);
                 ShadersSetGlobalDynamicLights(dynamicLightsBuffer);
             }
 
             if (dynamicLightsBvhBuffer == null || !dynamicLightsBvhBuffer.IsValid())
             {
+                // Release the old buffer if it exists but is invalid
+                if (dynamicLightsBvhBuffer != null && !dynamicLightsBvhBuffer.IsValid())
+                    dynamicLightsBvhBuffer.Release();
+                    
                 dynamicLightsBvhBuffer = new ComputeBuffer(1, dynamicLightsBvhNodeStride, ComputeBufferType.Default);
                 ShadersSetGlobalDynamicLightsBvh(dynamicLightsBvhBuffer);
             }
 
             if (dynamicLightsDistanceCubesBuffer == null || !dynamicLightsDistanceCubesBuffer.IsValid())
             {
+                // Release the old buffer if it exists but is invalid
+                if (dynamicLightsDistanceCubesBuffer != null && !dynamicLightsDistanceCubesBuffer.IsValid())
+                    dynamicLightsDistanceCubesBuffer.Release();
+                    
                 dynamicLightsDistanceCubesBuffer = new ComputeBuffer(1, sizeof(uint), ComputeBufferType.Default);
                 dynamicLightsDistanceCubesBuffer.SetData(new uint[] { 0 }); // Initialize with zero
                 ShadersSetGlobalDynamicLightsDistanceCubes(dynamicLightsDistanceCubesBuffer);
