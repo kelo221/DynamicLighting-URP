@@ -61,6 +61,7 @@ Shader "Dynamic Lighting/URP/Metallic"
 
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
             #include "Packages/com.unity.render-pipelines.core/ShaderLibrary/CommonMaterial.hlsl"
+            #include "Packages/com.unity.render-pipelines.core/ShaderLibrary/EntityLighting.hlsl"
             #include "Packages/de.alpacait.dynamiclighting/AlpacaIT.DynamicLighting/Shaders/DynamicLighting.hlsl"
 
             struct Attributes
@@ -111,53 +112,22 @@ Shader "Dynamic Lighting/URP/Metallic"
                 float4 _EmissionColor;
             CBUFFER_END
 
-            // ============================================================================
-            // PBR Helper Functions
-            // ============================================================================
+            // PBR Helper Functions are provided by Common.hlsl (included via DynamicLighting.hlsl)
+            // Available: DistributionGGX, GeometrySchlickGGX, GeometrySmith, fresnelSchlick, fresnelSchlickRoughness
 
-            float DistributionGGX(float3 N, float3 H, float roughness)
+            // Box projection for reflection probes (URP doesn't provide this by default)
+            float3 BoxProjectedCubemapDirection(float3 reflectionWS, float3 positionWS, float4 cubemapPositionWS, float4 boxMin, float4 boxMax)
             {
-                float a = roughness * roughness;
-                float a2 = a * a;
-                float NdotH = max(dot(N, H), 0.0);
-                float NdotH2 = NdotH * NdotH;
-
-                float num = a2;
-                float denom = (NdotH2 * (a2 - 1.0) + 1.0);
-                denom = UNITY_PI * denom * denom;
-
-                return num / denom;
-            }
-
-            float GeometrySchlickGGX(float NdotV, float roughness)
-            {
-                float r = (roughness + 1.0);
-                float k = (r * r) / 8.0;
-
-                float num = NdotV;
-                float denom = NdotV * (1.0 - k) + k;
-
-                return num / denom;
-            }
-
-            float GeometrySmith(float3 N, float3 V, float3 L, float roughness)
-            {
-                float NdotV = max(dot(N, V), 0.0);
-                float NdotL = max(dot(N, L), 0.0);
-                float ggx2 = GeometrySchlickGGX(NdotV, roughness);
-                float ggx1 = GeometrySchlickGGX(NdotL, roughness);
-
-                return ggx1 * ggx2;
-            }
-
-            float3 fresnelSchlick(float cosTheta, float3 F0)
-            {
-                return F0 + (1.0 - F0) * pow(saturate(1.0 - cosTheta), 5.0);
-            }
-
-            float3 fresnelSchlickRoughness(float cosTheta, float3 F0, float roughness)
-            {
-                return F0 + (max(float3(1.0 - roughness, 1.0 - roughness, 1.0 - roughness), F0) - F0) * pow(saturate(1.0 - cosTheta), 5.0);
+                // Based on Unity's built-in shader implementation
+                if (cubemapPositionWS.w > 0.0)
+                {
+                    float3 boxMinMax = (reflectionWS > 0.0) ? boxMax.xyz : boxMin.xyz;
+                    float3 rbMinMax = (boxMinMax - positionWS) / reflectionWS;
+                    float fa = min(min(rbMinMax.x, rbMinMax.y), rbMinMax.z);
+                    float3 worldPos = positionWS - cubemapPositionWS.xyz;
+                    return worldPos + reflectionWS * fa;
+                }
+                return reflectionWS;
             }
 
             // ============================================================================
