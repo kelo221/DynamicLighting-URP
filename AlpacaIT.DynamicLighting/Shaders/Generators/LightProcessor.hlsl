@@ -90,6 +90,12 @@ if (light.is_dynamic())
     map = dynamic_triangle.shadow_sample_bilinear(i.uv1);
 #endif
 
+    // apply per-material shadow strength if defined (allows light to pass through shadows)
+    // DYNAMIC_LIGHTING_SHADOW_STRENGTH should be defined as a float value (0-1) before including LightProcessor
+    #ifdef DYNAMIC_LIGHTING_SHADOW_STRENGTH
+        map = lerp(1.0, map, DYNAMIC_LIGHTING_SHADOW_STRENGTH);
+    #endif
+
 #if defined(DYNAMIC_LIGHTING_BOUNCE) && !defined(DYNAMIC_LIGHTING_INTEGRATED_GRAPHICS)
     // retrieve the bounce lighting sample.
     if (is_bounce_available)
