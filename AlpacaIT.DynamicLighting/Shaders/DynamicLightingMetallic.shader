@@ -183,7 +183,8 @@ Shader "Dynamic Lighting/Metallic"
                 worldNormal.z = dot(i.tspace2, bumpmap);
 
                 float3 N = normalize(worldNormal);
-                float3 V = normalize(_WorldSpaceCameraPos - i.world);
+                // URP: Use GetCameraPositionWS() instead of _WorldSpaceCameraPos for proper URP compatibility
+                float3 V = normalize(GetCameraPositionWS() - i.world);
 
                 // calculate reflectance at normal incidence; if dia-electric (like plastic) use F0
                 // of 0.04 and if it's a metal, use the albedo color as F0 (metallic workflow).
@@ -294,7 +295,8 @@ Shader "Dynamic Lighting/Metallic"
                 // The function may early-out and continue to the next light in the loop due to heavy optimizations.
                 //
                 #define GENERATE_NORMAL N
-                #include "Packages/de.alpacait.dynamiclighting/AlpacaIT.DynamicLighting/Shaders/Generators/LightProcessor.cginc"
+                // URP: Use .hlsl include instead of .cginc for proper URP compatibility
+                #include "Packages/de.alpacait.dynamiclighting/AlpacaIT.DynamicLighting/Shaders/Generators/LightProcessor.hlsl"
                 
                 // calculate per-light radiance
                 float3 H = normalize(V + light_direction);
