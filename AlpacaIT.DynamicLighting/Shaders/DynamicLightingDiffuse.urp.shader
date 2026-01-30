@@ -49,7 +49,17 @@ Shader "Dynamic Lighting/URP/Diffuse"
             #pragma multi_compile __ DYNAMIC_LIGHTING_BOUNCE
             #pragma multi_compile __ DYNAMIC_LIGHTING_DYNAMIC_GEOMETRY_DISTANCE_CUBES DYNAMIC_LIGHTING_DYNAMIC_GEOMETRY_ANGULAR
 
+            // Unity Universal Render Pipeline (URP) Lighting Support
+            #pragma multi_compile _ _MAIN_LIGHT_SHADOWS _MAIN_LIGHT_SHADOWS_CASCADE _MAIN_LIGHT_SHADOWS_SCREEN
+            #pragma multi_compile _ _ADDITIONAL_LIGHTS_VERTEX _ADDITIONAL_LIGHTS
+            #pragma multi_compile _ _ADDITIONAL_LIGHT_SHADOWS
+            #pragma multi_compile_fragment _ _FORWARD_PLUS
+            #pragma multi_compile_fragment _ _CLUSTER_LIGHT_LOOP
+            #pragma multi_compile_fragment _ _SHADOWS_SOFT
+            #pragma multi_compile_fragment _ _SCREEN_SPACE_OCCLUSION
+
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
+            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Lighting.hlsl"
             #include "Packages/de.alpacait.dynamiclighting/AlpacaIT.DynamicLighting/Shaders/DynamicLighting.hlsl"
 
             struct Attributes
@@ -72,6 +82,7 @@ Shader "Dynamic Lighting/URP/Diffuse"
                 float3 positionWS : TEXCOORD2;
                 float3 normalWS : TEXCOORD3;
                 float fogCoord : TEXCOORD4;
+                float4 shadowCoord : TEXCOORD5;
                 UNITY_VERTEX_INPUT_INSTANCE_ID
             };
 
@@ -111,6 +122,12 @@ Shader "Dynamic Lighting/URP/Diffuse"
 
                 output.color = input.color;
                 output.fogCoord = ComputeFogFactor(output.positionCS.z);
+                
+                output.color = input.color;
+                output.fogCoord = ComputeFogFactor(output.positionCS.z);
+                
+                // Handles Screen Space Shadows and Cascades correctly via URP internal logic
+                output.shadowCoord = TransformWorldToShadowCoord(vertexInput.positionWS);
 
                 return output;
             }
@@ -208,6 +225,31 @@ Shader "Dynamic Lighting/URP/Diffuse"
                 // This prevents overexposure artifacts on Linux NVIDIA drivers.
                 light_final = min(light_final, float3(65000.0, 65000.0, 65000.0));
 
+                // -------------------------------------------------------------------------
+                // Unity Light Support (Main Light + Additional Lights)
+                // -------------------------------------------------------------------------
+                
+                // 1. Main Light
+                Light mainLight = GetMainLight(i_original.shadowCoord, i_original.positionWS, half4(1,1,1,1));
+                float3 mainLightColor = mainLight.color * mainLight.distanceAttenuation * mainLight.shadowAttenuation * saturate(dot(i_original.normalWS, mainLight.direction));
+                light_final += mainLightColor;
+
+                // 2. Additional Lights
+                uint pixelLightCount = GetAdditionalLightsCount();
+
+                // Forward+ Clustered Lighting Support
+                InputData inputData = (InputData)0;
+                inputData.positionWS = i_original.positionWS;
+                inputData.normalizedScreenSpaceUV = GetNormalizedScreenSpaceUV(i_original.positionCS);
+
+                LIGHT_LOOP_BEGIN(pixelLightCount)
+                    Light light = GetAdditionalLight(lightIndex, i_original.positionWS, half4(1,1,1,1));
+                    float3 lightColor = light.color * light.distanceAttenuation * light.shadowAttenuation * saturate(dot(i_original.normalWS, light.direction));
+                    light_final += lightColor;
+                LIGHT_LOOP_END
+
+                // -------------------------------------------------------------------------
+
                 #ifdef DYNAMIC_LIGHTING_SCENE_VIEW_MODE_LIGHTING
                     // Scene view lighting mode - show lighting only (white albedo)
                     float4 col = float4(1, 1, 1, SAMPLE_TEXTURE2D(_MainTex, sampler_MainTex, i_original.uv).a) * float4(1, 1, 1, _Color.a) * float4(light_final, 1) * float4(1, 1, 1, i_original.color.a);
@@ -228,7 +270,7 @@ Shader "Dynamic Lighting/URP/Diffuse"
                 
                 // Final clamp: ensure output doesn't exceed valid range for framebuffer.
                 // Critical for NVIDIA/Vulkan which is strict about overflow values.
-                return float4(saturate(col.rgb), col.a);
+                return float4(col.rgb, col.a);
             }
 
 #else
@@ -262,6 +304,7 @@ Shader "Dynamic Lighting/URP/Diffuse"
             #pragma vertex ShadowPassVertex
             #pragma fragment ShadowPassFragment
             #pragma multi_compile_instancing
+            #pragma multi_compile_shadowcaster
             #pragma shader_feature_local _ _ALPHATEST_ON
 
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
