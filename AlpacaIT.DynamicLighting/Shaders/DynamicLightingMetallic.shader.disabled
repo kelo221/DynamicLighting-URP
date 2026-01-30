@@ -27,35 +27,39 @@ Shader "Dynamic Lighting/Metallic"
     CustomEditor "AlpacaIT.DynamicLighting.Editor.MetallicShaderGUI"
     SubShader
     {
-        Tags { "RenderType" = "Opaque" }
+        Tags { "RenderType" = "Opaque" "RenderPipeline" = "UniversalPipeline" }
         LOD 100
 
         Pass
         {
+            Name "UniversalForward"
+            Tags { "LightMode" = "UniversalForward" }
             Blend [_SrcBlend] [_DstBlend]
             ZWrite [_ZWrite]
             Cull [_Cull]
 
-            CGPROGRAM
+            HLSLPROGRAM
             #pragma target 4.5
             #pragma vertex vert
             #pragma fragment frag
             #pragma multi_compile_fog
-            #pragma multi_compile multi_compile_fwdbase
+            #pragma multi_compile _ _MAIN_LIGHT_SHADOWS _MAIN_LIGHT_SHADOWS_CASCADE
+            #pragma multi_compile _ _ADDITIONAL_LIGHTS_VERTEX _ADDITIONAL_LIGHTS
+            #pragma multi_compile_fragment _ _SHADOWS_SOFT
             #pragma multi_compile_instancing
             #pragma shader_feature_local METALLIC_TEXTURE_UNASSIGNED
             #pragma shader_feature_local _EMISSION
             #pragma shader_feature_local _ _ALPHATEST_ON _ALPHAPREMULTIPLY_ON
             #pragma shader_feature_local _ DYNAMIC_LIGHTING_CULL_FRONT DYNAMIC_LIGHTING_CULL_OFF
 
-            #include "UnityCG.cginc"
-            #include "UnityStandardUtils.cginc"
-            #include_with_pragmas "Packages/de.alpacait.dynamiclighting/AlpacaIT.DynamicLighting/Shaders/DynamicLighting.cginc"
+            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
+            #include "Packages/com.unity.render-pipelines.core/ShaderLibrary/CommonMaterial.hlsl"
+            #include_with_pragmas "Packages/de.alpacait.dynamiclighting/AlpacaIT.DynamicLighting/Shaders/DynamicLighting.hlsl"
 
             struct appdata
             {
-                float4 vertex : POSITION;
-                float3 normal : NORMAL;
+                float4 positionOS : POSITION;
+                float3 normalOS : NORMAL;
                 float2 uv0 : TEXCOORD0;
                 float2 uv1 : TEXCOORD1;
                 float4 color : COLOR;
@@ -68,68 +72,68 @@ Shader "Dynamic Lighting/Metallic"
                 float2 uv0 : TEXCOORD0;
                 float2 uv1 : TEXCOORD1;
                 float2 uv2 : TEXCOORD8;
-                UNITY_FOG_COORDS(7)
-                float4 vertex : SV_POSITION;
+                float4 positionCS : SV_POSITION;
                 float4 color : COLOR;
                 float3 world : TEXCOORD2;
                 float3 normal : TEXCOORD3;
                 float3 tspace0 : TEXCOORD4; // tangent.x, bitangent.x, normal.x
                 float3 tspace1 : TEXCOORD5; // tangent.y, bitangent.y, normal.y
                 float3 tspace2 : TEXCOORD6; // tangent.z, bitangent.z, normal.z
+                float fogCoord : TEXCOORD7;
                 UNITY_VERTEX_INPUT_INSTANCE_ID
             };
 
-            sampler2D _MainTex;
-            float4 _MainTex_ST;
-            sampler2D _MetallicGlossMap;
-            float _Metallic;
-            float _GlossMapScale;
-            sampler2D _BumpMap;
-            sampler2D _OcclusionMap;
-            float _BumpScale;
-            float _OcclusionStrength;
+            TEXTURE2D(_MainTex); SAMPLER(sampler_MainTex);
+            TEXTURE2D(_MetallicGlossMap); SAMPLER(sampler_MetallicGlossMap);
+            TEXTURE2D(_BumpMap); SAMPLER(sampler_BumpMap);
+            TEXTURE2D(_OcclusionMap); SAMPLER(sampler_OcclusionMap);
+            TEXTURE2D(_EmissionMap); SAMPLER(sampler_EmissionMap);
 
-            #if _EMISSION
-                sampler2D _EmissionMap;
-            #endif
-
-            #ifdef _ALPHATEST_ON
+            CBUFFER_START(UnityPerMaterial)
+                float4 _MainTex_ST;
+                float4 _Color;
                 float _Cutoff;
-            #endif
-
-            UNITY_INSTANCING_BUFFER_START(Props)
-            UNITY_DEFINE_INSTANCED_PROP(float4, _Color)
-            #ifdef _EMISSION
-                UNITY_DEFINE_INSTANCED_PROP(float4, _EmissionColor)
-            #endif
-            UNITY_INSTANCING_BUFFER_END(Props)
+                float _Metallic;
+                float _GlossMapScale;
+                float _BumpScale;
+                float _OcclusionStrength;
+                float4 _EmissionColor;
+                float _Mode;
+                float _SrcBlend;
+                float _DstBlend;
+                float _ZWrite;
+                float _Cull;
+            CBUFFER_END
 
             v2f vert (appdata v)
             {
                 UNITY_SETUP_INSTANCE_ID(v);
 
                 v2f o;
-                o.vertex = UnityObjectToClipPos(v.vertex);
-                o.uv0 = TRANSFORM_TEX(v.uv0, _MainTex);
+                o.positionCS = TransformObjectToHClip(v.positionOS.xyz);
+                o.uv0 = v.uv0 * _MainTex_ST.xy + _MainTex_ST.zw;
                 // as we need pixel coordinates the xy component also contains the lightmap resolution.
                 // confirmed with NVIDIA Quadro K1000M improving the framerate.
                 o.uv1 = (v.uv1 - dynamic_lighting_unity_LightmapST.zw) * dynamic_lighting_unity_LightmapST.xy;
                 o.uv2 = v.uv1 * unity_LightmapST.xy + unity_LightmapST.zw;
                 o.color = v.color;
-                o.normal = UnityObjectToWorldNormal(v.normal);
-                o.world = mul(unity_ObjectToWorld, v.vertex).xyz;
+                o.world = TransformObjectToWorld(v.positionOS.xyz);
 
-                float3 wTangent = UnityObjectToWorldDir(v.tangent.xyz);
+                float3 normalWS = TransformObjectToWorldNormal(v.normalOS);
+                o.normal = normalWS;
+
+                float3 wTangent = TransformObjectToWorldDir(v.tangent.xyz);
                 // compute bitangent from cross product of normal and tangent
-                float tangentSign = v.tangent.w * unity_WorldTransformParams.w;
-                float3 wBitangent = cross(o.normal, wTangent) * tangentSign;
+                float tangentSign = v.tangent.w * GetOddNegativeScale();
+                float3 wBitangent = cross(normalWS, wTangent) * tangentSign;
                 // output the tangent space matrix
-                o.tspace0 = float3(wTangent.x, wBitangent.x, o.normal.x);
-                o.tspace1 = float3(wTangent.y, wBitangent.y, o.normal.y);
-                o.tspace2 = float3(wTangent.z, wBitangent.z, o.normal.z);
+                o.tspace0 = float3(wTangent.x, wBitangent.x, normalWS.x);
+                o.tspace1 = float3(wTangent.y, wBitangent.y, normalWS.y);
+                o.tspace2 = float3(wTangent.z, wBitangent.z, normalWS.z);
 
-                UNITY_TRANSFER_INSTANCE_ID(v,o);
-                UNITY_TRANSFER_FOG(o,o.vertex);
+                o.fogCoord = ComputeFogFactor(o.positionCS.z);
+
+                UNITY_TRANSFER_INSTANCE_ID(v, o);
                 return o;
             }
 
@@ -159,19 +163,19 @@ Shader "Dynamic Lighting/Metallic"
                 UNITY_SETUP_INSTANCE_ID(i);
 
                 // material parameters
-                float4 albedo = tex2D(_MainTex, i.uv0) * UNITY_ACCESS_INSTANCED_PROP(Props, _Color) * i.color;
+                float4 albedo = SAMPLE_TEXTURE2D(_MainTex, sampler_MainTex, i.uv0) * _Color * i.color;
                 
             #if METALLIC_TEXTURE_UNASSIGNED
                 float metallic = _Metallic;
                 float roughness = 1.0 - _GlossMapScale;
             #else
-                float4 metallicmap = tex2D(_MetallicGlossMap, i.uv0);
+                float4 metallicmap = SAMPLE_TEXTURE2D(_MetallicGlossMap, sampler_MetallicGlossMap, i.uv0);
                 float metallic = metallicmap.r;
                 float roughness = 1.0 - metallicmap.a * _GlossMapScale;
             #endif
-                float ao = tex2D(_OcclusionMap, i.uv0).r;
+                float ao = SAMPLE_TEXTURE2D(_OcclusionMap, sampler_OcclusionMap, i.uv0).r;
 
-                float3 bumpmap = UnpackNormalWithScale(tex2D(_BumpMap, i.uv0), _BumpScale);
+                float3 bumpmap = UnpackNormalScale(SAMPLE_TEXTURE2D(_BumpMap, sampler_BumpMap, i.uv0), _BumpScale);
                 // transform normal from tangent to world space
                 float3 worldNormal;
                 worldNormal.x = dot(i.tspace0, bumpmap);
@@ -179,11 +183,12 @@ Shader "Dynamic Lighting/Metallic"
                 worldNormal.z = dot(i.tspace2, bumpmap);
 
                 float3 N = normalize(worldNormal);
-                float3 V = normalize(_WorldSpaceCameraPos - i.world);
+                // URP: Use GetCameraPositionWS() instead of _WorldSpaceCameraPos for proper URP compatibility
+                float3 V = normalize(GetCameraPositionWS() - i.world);
 
                 // calculate reflectance at normal incidence; if dia-electric (like plastic) use F0
                 // of 0.04 and if it's a metal, use the albedo color as F0 (metallic workflow).
-                float3 F0 = lerp(0.04, albedo.rgb, metallic);
+                float3 F0 = lerp(float3(0.04, 0.04, 0.04), albedo.rgb, metallic);
 
                 // reflectance equation
                 float3 Lo = float3(0.0, 0.0, 0.0);
@@ -206,7 +211,7 @@ Shader "Dynamic Lighting/Metallic"
                     // adjust the reflection direction for box projection.
                     refl0 = BoxProjectedCubemapDirection(refl0, i.world, unity_SpecCube0_ProbePosition, unity_SpecCube0_BoxMin, unity_SpecCube0_BoxMax);
                 #endif
-                float3 skyColor = DecodeHDR(UNITY_SAMPLE_TEXCUBE_LOD(unity_SpecCube0, refl0, roughness * 4.0), unity_SpecCube0_HDR);
+                float3 skyColor = DecodeHDREnvironment(SAMPLE_TEXTURECUBE_LOD(unity_SpecCube0, samplerunity_SpecCube0, refl0, roughness * 4.0), unity_SpecCube0_HDR);
 
                 // sample the secondary reflection probe (blending).
                 #ifdef UNITY_SPECCUBE_BLENDING
@@ -220,7 +225,7 @@ Shader "Dynamic Lighting/Metallic"
                         #endif
                         
                         // sample cube1 using cube0's sampler to ensure compatibility.
-                        float3 skyColor1 = DecodeHDR(UNITY_SAMPLE_TEXCUBE_SAMPLER_LOD(unity_SpecCube1, unity_SpecCube0, refl1, roughness * 4.0), unity_SpecCube1_HDR);
+                        float3 skyColor1 = DecodeHDREnvironment(SAMPLE_TEXTURECUBE_LOD(unity_SpecCube1, samplerunity_SpecCube0, refl1, roughness * 4.0), unity_SpecCube1_HDR);
                         
                         // reflection probe blending.
                         skyColor = lerp(skyColor1, skyColor, blendLerp);
@@ -237,7 +242,7 @@ Shader "Dynamic Lighting/Metallic"
                 #endif
                 
                 // the final lighting calculation combining all of the parts.
-                float3 ambient = kD * albedo * (unity_lightmap_color + dynamic_ambient_color);
+                float3 ambient = kD * albedo.rgb * (unity_lightmap_color + dynamic_ambient_color);
                 float3 color = (ambient + Lo) * lerp(1.0, ao, _OcclusionStrength) + specular;
                 
                 // clip the fragments when cutout mode is active (leaves holes in color and depth buffers).
@@ -247,11 +252,11 @@ Shader "Dynamic Lighting/Metallic"
 
                 // sample the emission map, add after lighting calculations.
                 #if _EMISSION
-                    color.rgb += tex2D(_EmissionMap, i.uv0).rgb * UNITY_ACCESS_INSTANCED_PROP(Props, _EmissionColor).rgb;
+                    color.rgb += SAMPLE_TEXTURE2D(_EmissionMap, sampler_EmissionMap, i.uv0).rgb * _EmissionColor.rgb;
                 #endif
 
                 // apply fog.
-                UNITY_APPLY_FOG(i.fogCoord, color);
+                color = MixFog(color, i.fogCoord);
 
             #ifdef _ALPHAPREMULTIPLY_ON
                 return float4(color, albedo.a);
@@ -290,7 +295,8 @@ Shader "Dynamic Lighting/Metallic"
                 // The function may early-out and continue to the next light in the loop due to heavy optimizations.
                 //
                 #define GENERATE_NORMAL N
-                #include "Packages/de.alpacait.dynamiclighting/AlpacaIT.DynamicLighting/Shaders/Generators/LightProcessor.cginc"
+                // URP: Use .hlsl include instead of .cginc for proper URP compatibility
+                #include "Packages/de.alpacait.dynamiclighting/AlpacaIT.DynamicLighting/Shaders/Generators/LightProcessor.hlsl"
                 
                 // calculate per-light radiance
                 float3 H = normalize(V + light_direction);
@@ -349,30 +355,89 @@ Shader "Dynamic Lighting/Metallic"
                 DYNLIT_FRAGMENT_UNLIT
 
             #endif
-            ENDCG
+            ENDHLSL
         }
 
         Pass
         {
-            Name "FORWARD_DELTA"
-			Tags { "LightMode" = "ForwardAdd" }
-			Blend One One
-			ZWrite Off
+            Name "ShadowCaster"
+            Tags { "LightMode" = "ShadowCaster" }
+            ZWrite On
+            ZTest LEqual
+            ColorMask 0
 
-            CGPROGRAM
-            #include_with_pragmas "Packages/de.alpacait.dynamiclighting/AlpacaIT.DynamicLighting/Shaders/Generators/ForwardAddMetallic.cginc"
-            ENDCG
+            HLSLPROGRAM
+            #pragma target 4.5
+            #pragma vertex ShadowVertex
+            #pragma fragment ShadowFragment
+            #pragma multi_compile_instancing
+            #pragma shader_feature_local _ _ALPHATEST_ON _ALPHAPREMULTIPLY_ON
+
+            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
+            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Shadows.hlsl"
+
+            struct appdata
+            {
+                float4 positionOS : POSITION;
+                float3 normalOS : NORMAL;
+                float2 uv0 : TEXCOORD0;
+                UNITY_VERTEX_INPUT_INSTANCE_ID
+            };
+
+            struct v2f
+            {
+                float2 uv0 : TEXCOORD0;
+                float4 positionCS : SV_POSITION;
+                UNITY_VERTEX_INPUT_INSTANCE_ID
+            };
+
+            TEXTURE2D(_MainTex); SAMPLER(sampler_MainTex);
+
+            CBUFFER_START(UnityPerMaterial)
+                float4 _MainTex_ST;
+                float4 _Color;
+                float _Cutoff;
+                float _Metallic;
+                float _GlossMapScale;
+                float _BumpScale;
+                float _OcclusionStrength;
+                float4 _EmissionColor;
+                float _Mode;
+                float _SrcBlend;
+                float _DstBlend;
+                float _ZWrite;
+                float _Cull;
+            CBUFFER_END
+
+            v2f ShadowVertex(appdata v)
+            {
+                UNITY_SETUP_INSTANCE_ID(v);
+
+                v2f o;
+                VertexPositionInputs positionInputs = GetVertexPositionInputs(v.positionOS.xyz);
+                float3 normalWS = TransformObjectToWorldNormal(v.normalOS);
+                o.positionCS = TransformWorldToHClip(ApplyShadowBias(positionInputs.positionWS, normalWS, _MainLightPosition.xyz));
+                o.positionCS.z = min(o.positionCS.z, o.positionCS.w * UNITY_NEAR_CLIP_VALUE);
+                o.uv0 = v.uv0 * _MainTex_ST.xy + _MainTex_ST.zw;
+                UNITY_TRANSFER_INSTANCE_ID(v, o);
+                return o;
+            }
+
+            float4 ShadowFragment(v2f i) : SV_Target
+            {
+                UNITY_SETUP_INSTANCE_ID(i);
+                float alpha = _Color.a * SAMPLE_TEXTURE2D(_MainTex, sampler_MainTex, i.uv0).a;
+                #if defined(DYNAMIC_LIGHTING_LEGACY_TRANSPARENT_SHADER)
+                    clip(alpha - 0.5);
+                #elif defined(_ALPHAPREMULTIPLY_ON) || defined(_ALPHATEST_ON)
+                    clip(alpha - _Cutoff);
+                #else
+                    clip(1);
+                #endif
+                return 0;
+            }
+            ENDHLSL
         }
-
-		Pass
-        {
-			Name "ShadowCaster"
-			Tags { "LightMode" = "ShadowCaster" }
-
-			CGPROGRAM
-            #include_with_pragmas "Packages/de.alpacait.dynamiclighting/AlpacaIT.DynamicLighting/Shaders/Generators/ShadowCaster.cginc"
-			ENDCG
-		}
     }
     Fallback "Diffuse"
 }

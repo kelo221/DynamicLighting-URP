@@ -91,7 +91,8 @@ namespace AlpacaIT.DynamicLighting
             cloneMeshRenderer.sharedMaterials = meshRenderer.sharedMaterials;
 
             // and the important mesh collider for raycasting.
-            clone.AddComponent<MeshCollider>();
+            var cloneMeshCollider = clone.AddComponent<MeshCollider>();
+            cloneMeshCollider.sharedMesh = mesh;
 #endif
             return true;
         }

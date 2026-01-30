@@ -1,3 +1,6 @@
+#ifndef DYNAMIC_LIGHTING_COMMON_INCLUDED
+    #define DYNAMIC_LIGHTING_COMMON_INCLUDED
+
 #ifndef UNITY_PI
     #define UNITY_PI 3.14159265
 #endif
@@ -114,7 +117,8 @@ bool point_in_aabb(float3 pos, float3 min, float3 max)
 
 bool ray_box_intersection(float3 rayOrigin, float3 rayDir, float3 boxMin, float3 boxMax, out float tMin, out float tMax, float maxDepth)
 {
-    float3 invDir = 1.0 / rayDir;
+    // Add epsilon to prevent division by zero on NVIDIA/Vulkan.
+    float3 invDir = 1.0 / (rayDir + float3(0.00001, 0.00001, 0.00001));
     float3 t0 = (boxMin - rayOrigin) * invDir;
     float3 t1 = (boxMax - rayOrigin) * invDir;
     float3 tMinVec = min(t0, t1);
@@ -137,7 +141,8 @@ bool ray_cone_intersection(float3 rayOrigin, float3 rayDir, float3 coneTip, floa
     float cosTheta = cos(coneAngle);
     float cosTheta2 = cosTheta * cosTheta;
     float sinTheta2 = 1.0 - cosTheta2;
-    float invCosTheta2 = 1.0 / cosTheta2;
+    // Add epsilon to prevent division by zero on NVIDIA/Vulkan.
+    float invCosTheta2 = 1.0 / (cosTheta2 + 0.00001);
 
     float d_dot_s = dot(rayDir, coneDir);
     float w_dot_s = dot(w, coneDir);
@@ -260,7 +265,10 @@ uint minivector3(float3 v)
     return (float8(v.z) << 16) | (float8(v.y) << 8) | float8(v.x);
 }
 
-float texture_alpha_sample_gaussian5(sampler2D tex, float2 texelsize, float2 uv)
+// note: legacy sampler2D usage here kept for simplicity as it works in HLSL too 
+// assuming TEXTURE2D_ARGS macros aren't mandatory for this specific internal utility
+// texelsize parameter is float4 to match Unity's _MainTex_TexelSize (xy = 1/size, zw = size)
+float texture_alpha_sample_gaussian5(sampler2D tex, float4 texelsize, float2 uv)
 {
     const float weights[5][5] =
     {
@@ -277,7 +285,7 @@ float texture_alpha_sample_gaussian5(sampler2D tex, float2 texelsize, float2 uv)
     {
         for (int j = -2; j <= 2; ++j)
         {
-            map += weights[i + 2][j + 2] * tex2D(tex, uv + float2(i, j) * texelsize).a;
+            map += weights[i + 2][j + 2] * tex2D(tex, uv + float2(i, j) * texelsize.xy).a;
         }
     }
         
@@ -303,12 +311,14 @@ float DistributionGGX(float3 N, float3 H, float roughness)
 {
     float a = roughness * roughness;
     float a2 = a * a;
-    float NdotH = max(dot(N, H), 0.0);
+    // Saturate dot product to prevent values outside [0,1] on NVIDIA/Vulkan.
+    float NdotH = saturate(dot(N, H));
     float NdotH2 = NdotH * NdotH;
 
     float num = a2;
     float denom = (NdotH2 * (a2 - 1.0) + 1.0);
-    denom = UNITY_PI * denom * denom;
+    // Add epsilon to prevent division by zero on NVIDIA/Vulkan.
+    denom = UNITY_PI * denom * denom + 0.00001;
 
     return num / denom;
 }
@@ -322,15 +332,17 @@ float GeometrySchlickGGX(float NdotV, float roughness)
     float k = (r * r) / 8.0;
 
     float num = NdotV;
-    float denom = NdotV * (1.0 - k) + k;
+    // Add epsilon to prevent division by zero on NVIDIA/Vulkan.
+    float denom = NdotV * (1.0 - k) + k + 0.00001;
 
     return num / denom;
 }
 
 float GeometrySmith(float3 N, float3 V, float3 L, float roughness)
 {
-    float NdotV = max(dot(N, V), 0.0);
-    float NdotL = max(dot(N, L), 0.0);
+    // Saturate dot products to prevent values outside [0,1] on NVIDIA/Vulkan.
+    float NdotV = saturate(dot(N, V));
+    float NdotL = saturate(dot(N, L));
     float ggx2 = GeometrySchlickGGX(NdotV, roughness);
     float ggx1 = GeometrySchlickGGX(NdotL, roughness);
 
@@ -348,3 +360,5 @@ float3 fresnelSchlickRoughness(float cosTheta, float3 F0, float roughness)
 {
     return F0 + (max(1.0 - roughness, F0) - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
 }
+
+#endif

@@ -186,6 +186,7 @@ namespace AlpacaIT.DynamicLighting
 #if UNITY_EDITOR
                 // delete all of the old lightmap data in the scene and on disk.
                 dynamicLightManager.EditorDeleteLightmaps();
+                dynamicLightManager.EnsureDummyBuffers();
 #endif
                 // store everything inside of a scripted object.
                 dynamicLightManager.raycastedScene = ScriptableObject.CreateInstance<RaycastedScene>();
@@ -212,6 +213,9 @@ namespace AlpacaIT.DynamicLighting
                 var goodFilters = new bool[meshFilters.Length];
                 for (int i = 0; i < meshFilters.Length; i++)
                     goodFilters[i] = TemporarySceneAdd(meshFilters[i]);
+
+                // ensure that the physics engine is up to date with the new colliders.
+                Physics.SyncTransforms();
 #if UNITY_EDITOR
                 var progressTitle = "Dynamic Lighting";
                 var progressDescription = "Initial warmup...";
@@ -291,6 +295,9 @@ namespace AlpacaIT.DynamicLighting
                 // have unity editor reload the modified assets.
                 UnityEditor.AssetDatabase.Refresh();
 #endif
+                // reloading the dynamic light manager will apply the new changes to the scene.
+                dynamicLightManager.Reload();
+
                 log.Append("Raycasts: ").Append(traces).Append(" (").Append(tracingTime.ToString()).AppendLine(")");
                 log.Append("Bounce Lighting: ").AppendLine(bounceTime.ToString());
                 log.Append("Bounding Volume Hierarchy: ").AppendLine(bvhTime.ToString());

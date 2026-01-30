@@ -51,5 +51,10 @@ namespace AlpacaIT.DynamicLighting
         public Material guassianBlurMaterial;
         public Material shadowCameraDepthMaterial;
         public Material photonCameraPhotonCubeMaterial;
+
+#if UNITY_PIPELINE_URP
+        /// <summary>The URP volumetric fog post-processing shader.</summary>
+        public Shader volumetricFogUrpShader;
+#endif
     }
 }

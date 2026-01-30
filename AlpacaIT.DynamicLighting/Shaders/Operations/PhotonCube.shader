@@ -8,17 +8,20 @@ Shader "Hidden/Dynamic Lighting/PhotonCube"
 
     SubShader
     {
-        Tags { "RenderType" = "Opaque" }
+        Tags { "RenderType" = "Opaque" "RenderPipeline" = "UniversalPipeline" }
         LOD 100
 
         Pass
         {
-            CGPROGRAM
+            Name "PhotonCube"
+            Tags { "LightMode" = "UniversalForward" }
+
+            HLSLPROGRAM
             #pragma vertex vert
             #pragma fragment frag
             
-            #include "UnityCG.cginc"
-            #include "Packages/de.alpacait.dynamiclighting/AlpacaIT.DynamicLighting/Shaders/Internal/Common.cginc"
+            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
+            #include "Packages/de.alpacait.dynamiclighting/AlpacaIT.DynamicLighting/Shaders/Internal/Common.hlsl"
 
             struct appdata
             {
@@ -36,9 +39,12 @@ Shader "Hidden/Dynamic Lighting/PhotonCube"
             v2f vert (appdata v)
             {
                 v2f o;
-                o.vertex = UnityObjectToClipPos(v.vertex);
-                o.normal = UnityObjectToWorldNormal(v.normal);
-                o.world = mul(unity_ObjectToWorld, v.vertex).xyz;
+                VertexPositionInputs vertexInput = GetVertexPositionInputs(v.vertex.xyz);
+                VertexNormalInputs normalInput = GetVertexNormalInputs(v.normal);
+
+                o.vertex = vertexInput.positionCS;
+                o.world = vertexInput.positionWS;
+                o.normal = normalInput.normalWS;
                 return o;
             }
 
@@ -68,23 +74,26 @@ Shader "Hidden/Dynamic Lighting/PhotonCube"
                 return result;
             }
 
-            ENDCG
+            ENDHLSL
         }
     }
 
     SubShader
     {
-        Tags { "Queue"="Transparent" "IgnoreProjector"="True" "RenderType" = "Transparent" }
+        Tags { "Queue"="Transparent" "IgnoreProjector"="True" "RenderType" = "Transparent" "RenderPipeline" = "UniversalPipeline" }
         LOD 100
 
         Pass
         {
-            CGPROGRAM
+            Name "PhotonCubeTransparent"
+            Tags { "LightMode" = "UniversalForward" }
+
+            HLSLPROGRAM
             #pragma vertex vert
             #pragma fragment frag
             
-            #include "UnityCG.cginc"
-            #include "Packages/de.alpacait.dynamiclighting/AlpacaIT.DynamicLighting/Shaders/Internal/Common.cginc"
+            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
+            #include "Packages/de.alpacait.dynamiclighting/AlpacaIT.DynamicLighting/Shaders/Internal/Common.hlsl"
 
             struct appdata
             {
@@ -108,10 +117,13 @@ Shader "Hidden/Dynamic Lighting/PhotonCube"
             v2f vert (appdata v)
             {
                 v2f o;
-                o.vertex = UnityObjectToClipPos(v.vertex);
-                o.normal = UnityObjectToWorldNormal(v.normal);
+                VertexPositionInputs vertexInput = GetVertexPositionInputs(v.vertex.xyz);
+                VertexNormalInputs normalInput = GetVertexNormalInputs(v.normal);
+
+                o.vertex = vertexInput.positionCS;
+                o.world = vertexInput.positionWS;
+                o.normal = normalInput.normalWS;
                 o.uv0 = TRANSFORM_TEX(v.uv0, _MainTex);
-                o.world = mul(unity_ObjectToWorld, v.vertex).xyz;
                 return o;
             }
 
@@ -153,23 +165,26 @@ Shader "Hidden/Dynamic Lighting/PhotonCube"
                 return result;
             }
 
-            ENDCG
+            ENDHLSL
         }
     }
 
     SubShader
     {
-        Tags { "Queue"="Transparent" "IgnoreProjector"="True" "RenderType" = "TransparentCutout" }
+        Tags { "Queue"="Transparent" "IgnoreProjector"="True" "RenderType" = "TransparentCutout" "RenderPipeline" = "UniversalPipeline" }
         LOD 100
 
         Pass
         {
-            CGPROGRAM
+            Name "PhotonCubeCutout"
+            Tags { "LightMode" = "UniversalForward" }
+
+            HLSLPROGRAM
             #pragma vertex vert
             #pragma fragment frag
             
-            #include "UnityCG.cginc"
-            #include "Packages/de.alpacait.dynamiclighting/AlpacaIT.DynamicLighting/Shaders/Internal/Common.cginc"
+            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
+            #include "Packages/de.alpacait.dynamiclighting/AlpacaIT.DynamicLighting/Shaders/Internal/Common.hlsl"
 
             struct appdata
             {
@@ -193,10 +208,13 @@ Shader "Hidden/Dynamic Lighting/PhotonCube"
             v2f vert (appdata v)
             {
                 v2f o;
-                o.vertex = UnityObjectToClipPos(v.vertex);
-                o.normal = UnityObjectToWorldNormal(v.normal);
+                VertexPositionInputs vertexInput = GetVertexPositionInputs(v.vertex.xyz);
+                VertexNormalInputs normalInput = GetVertexNormalInputs(v.normal);
+
+                o.vertex = vertexInput.positionCS;
+                o.world = vertexInput.positionWS;
+                o.normal = normalInput.normalWS;
                 o.uv0 = TRANSFORM_TEX(v.uv0, _MainTex);
-                o.world = mul(unity_ObjectToWorld, v.vertex).xyz;
                 return o;
             }
 
@@ -238,7 +256,7 @@ Shader "Hidden/Dynamic Lighting/PhotonCube"
                 return result;
             }
 
-            ENDCG
+            ENDHLSL
         }
     }
     Fallback "Diffuse"

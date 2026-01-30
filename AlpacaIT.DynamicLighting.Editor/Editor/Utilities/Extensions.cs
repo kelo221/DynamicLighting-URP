@@ -105,7 +105,7 @@ namespace AlpacaIT.DynamicLighting.Editor
         /// <param name="indent">The indentation to move the label to the right.</param>
         public static void Property(this MaterialEditor materialEditor, MaterialProperty property, int indent = 0)
         {
-            if (property.type == MaterialProperty.PropType.Texture)
+            if (property.propertyType == ShaderPropertyType.Texture)
             {
                 EditorGUI.indentLevel += indent;
                 materialEditor.TexturePropertySingleLine(new GUIContent(property.displayName), property);

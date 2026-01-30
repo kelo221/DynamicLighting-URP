@@ -39,6 +39,7 @@ float4 _Color;
 v2f vert (appdata v)
 {
     v2f o;
+    UNITY_INITIALIZE_OUTPUT(v2f, o); // Initialize all fields to zero to prevent "not completely initialized" warnings
     o.pos = UnityObjectToClipPos(v.vertex);
     o.uv0 = TRANSFORM_TEX(v.uv0, _MainTex);
     o.color = v.color;

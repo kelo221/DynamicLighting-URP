@@ -39,7 +39,8 @@ namespace AlpacaIT.DynamicLighting
                 var raycastedDynamicLight = raycastedDynamicLights[i];
 
                 // destroyed raycasted lights in the scene, must still exist in the shader.
-                if (!raycastedDynamicLight.lightAvailable)
+                // also handle null light references to prevent NullReferenceException.
+                if (!raycastedDynamicLight.lightAvailable || raycastedDynamicLight.light == null || raycastedDynamicLight.light.transform == null)
                 {
                     // add invalid transform to the native array to keep the indices correct:
                     lightPositionsRaycastedLightTransforms.Add(transform); // null causes 'slow performance' warning >= unity 6.
@@ -66,6 +67,14 @@ namespace AlpacaIT.DynamicLighting
         /// <summary>Called before the lights are iterated for updates.</summary>
         private unsafe void LightPositionsUpdate()
         {
+            // Safety check: ensure the TransformAccessArray is valid before scheduling jobs.
+            if (!lightPositionsRaycastedLightTransforms.isCreated)
+                return;
+
+            // Safety check: ensure the position arrays are valid.
+            if (lightPositionsRaycastedLightPositions == null || lightPositionsRaycastedLightScales == null)
+                return;
+
             // relax the workload when desired by only updating when necessary.
 #if UNITY_EDITOR
             if (editorIsPlaying && lightTrackingMode == DynamicLightTrackingMode.RelaxedTracking)
@@ -101,7 +110,20 @@ namespace AlpacaIT.DynamicLighting
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void LightPositionsOnRaycastedDynamicLightAvailable(int raycastedDynamicLightsIndex)
         {
-            lightPositionsRaycastedLightTransforms[raycastedDynamicLightsIndex] = raycastedDynamicLights[raycastedDynamicLightsIndex].light.transform;
+            // Safety check: ensure the TransformAccessArray is valid before writing.
+            if (!lightPositionsRaycastedLightTransforms.isCreated)
+                return;
+
+            // Validate the index is within bounds.
+            if (raycastedDynamicLightsIndex < 0 || raycastedDynamicLightsIndex >= lightPositionsRaycastedLightTransforms.length)
+                return;
+
+            // Get the light and validate it exists.
+            var raycastedDynamicLight = raycastedDynamicLights[raycastedDynamicLightsIndex];
+            if (raycastedDynamicLight.light == null || raycastedDynamicLight.light.transform == null)
+                return;
+
+            lightPositionsRaycastedLightTransforms[raycastedDynamicLightsIndex] = raycastedDynamicLight.light.transform;
             lightPositionsDirty = true;
         }
 

@@ -141,7 +141,7 @@ namespace AlpacaIT.DynamicLighting
 #if !UNITY_2021_2_OR_NEWER
                 if (hit->distance == 0f && hit->point.Equals(Vector3.zero))
 #else
-                if (hit->colliderInstanceID == 0)
+                if (hit->colliderEntityId == 0)
 #endif
                 {
                     handler.OnRaycastMiss();

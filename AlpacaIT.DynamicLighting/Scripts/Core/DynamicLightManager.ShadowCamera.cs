@@ -53,7 +53,22 @@ namespace AlpacaIT.DynamicLighting
         /// <summary>Initialization of the DynamicLightManager.ShadowCamera partial class.</summary>
         private void ShadowCameraInitialize()
         {
+            // Safety check: ensure we have the required resources before proceeding.
             var dynamicLightingResources = DynamicLightingResources.Instance;
+            if (dynamicLightingResources == null)
+            {
+                Debug.LogWarning("DynamicLightingResources.Instance is null. Shadow camera initialization skipped.");
+                return;
+            }
+
+#if UNITY_PIPELINE_URP
+            // Safety check: ensure URP is properly configured.
+            if (UnityEngine.Rendering.GraphicsSettings.currentRenderPipeline == null)
+            {
+                Debug.LogWarning("No active RenderPipelineAsset found. Shadow camera initialization skipped.");
+                return;
+            }
+#endif
             shadowCameraDepthShader = dynamicLightingResources.shadowCameraDepthShader;
             shadowCameraGuassianBlurMaterial = dynamicLightingResources.guassianBlurMaterial;
 
@@ -110,14 +125,30 @@ namespace AlpacaIT.DynamicLighting
         private void ShadowCameraCleanup()
         {
             // cleanup the render pipeline related resources.
-            shadowCameraPipeline.Cleanup();
+            if (shadowCameraPipeline != null)
+            {
+                shadowCameraPipeline.Cleanup();
+                shadowCameraPipeline = null;
+            }
 
             // destroy the shadow camera game object.
-            DestroyImmediate(shadowCameraGameObject);
+            if (shadowCameraGameObject != null)
+            {
+                DestroyImmediate(shadowCameraGameObject);
+                shadowCameraGameObject = null;
+            }
 
             // release the unity resources we no longer need.
-            shadowCameraCubemaps.Release();
-            shadowCameraCubemaps = null;
+            if (shadowCameraCubemaps != null)
+            {
+                shadowCameraCubemaps.Release();
+                shadowCameraCubemaps = null;
+            }
+
+            // clear additional references.
+            shadowCameraTransform = null;
+            shadowCamera = null;
+            shadowCameraRenderTexture = null;
         }
 
         /// <summary>Called before the lights are processed for rendering.</summary>
