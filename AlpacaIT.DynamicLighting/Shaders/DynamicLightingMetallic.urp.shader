@@ -292,7 +292,8 @@ Shader "Dynamic Lighting/URP/Metallic"
                     {
                         DynamicLight light = dynamic_lights[k];
                         #if defined(DYNAMIC_LIGHTING_DYNAMIC_GEOMETRY_DISTANCE_CUBES) || defined(DYNAMIC_LIGHTING_DYNAMIC_GEOMETRY_ANGULAR)
-                            ProcessLight(light, i_original, dynamic_triangle, (int)k, is_front_face, DYNLIT_FRAGMENT_LIGHT_IN_PARAMETERS);
+                            int dynamicGeometryLightIndex = (k < dynamic_lights_count) ? (int)k : -1;
+                            ProcessLight(light, i_original, dynamic_triangle, dynamicGeometryLightIndex, is_front_face, DYNLIT_FRAGMENT_LIGHT_IN_PARAMETERS);
                         #else
                             ProcessLight(light, i_original, dynamic_triangle, -1, is_front_face, DYNLIT_FRAGMENT_LIGHT_IN_PARAMETERS);
                         #endif
