@@ -59,7 +59,17 @@ Shader "Dynamic Lighting/URP/Metallic"
             #pragma multi_compile __ DYNAMIC_LIGHTING_BOUNCE
             #pragma multi_compile __ DYNAMIC_LIGHTING_DYNAMIC_GEOMETRY_DISTANCE_CUBES DYNAMIC_LIGHTING_DYNAMIC_GEOMETRY_ANGULAR
 
+            // Unity Universal Render Pipeline (URP) Lighting Support
+            #pragma multi_compile _ _MAIN_LIGHT_SHADOWS _MAIN_LIGHT_SHADOWS_CASCADE _MAIN_LIGHT_SHADOWS_SCREEN
+            #pragma multi_compile _ _ADDITIONAL_LIGHTS_VERTEX _ADDITIONAL_LIGHTS
+            #pragma multi_compile _ _ADDITIONAL_LIGHT_SHADOWS
+            #pragma multi_compile_fragment _ _FORWARD_PLUS
+            #pragma multi_compile_fragment _ _CLUSTER_LIGHT_LOOP
+            #pragma multi_compile_fragment _ _SHADOWS_SOFT
+            #pragma multi_compile_fragment _ _SCREEN_SPACE_OCCLUSION
+
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
+            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Lighting.hlsl"
             #include "Packages/com.unity.render-pipelines.core/ShaderLibrary/CommonMaterial.hlsl"
             #include "Packages/com.unity.render-pipelines.core/ShaderLibrary/EntityLighting.hlsl"
             #include "Packages/de.alpacait.dynamiclighting/AlpacaIT.DynamicLighting/Shaders/DynamicLighting.hlsl"
@@ -88,6 +98,7 @@ Shader "Dynamic Lighting/URP/Metallic"
                 float3 tspace1 : TEXCOORD5; // tangent.y, bitangent.y, normal.y
                 float3 tspace2 : TEXCOORD6; // tangent.z, bitangent.z, normal.z
                 float fogCoord : TEXCOORD7;
+                float4 shadowCoord : TEXCOORD8;
                 UNITY_VERTEX_INPUT_INSTANCE_ID
             };
 
@@ -162,6 +173,12 @@ Shader "Dynamic Lighting/URP/Metallic"
 
                 output.color = input.color;
                 output.fogCoord = ComputeFogFactor(output.positionCS.z);
+                
+                output.color = input.color;
+                output.fogCoord = ComputeFogFactor(output.positionCS.z);
+                
+                // Handles Screen Space Shadows and Cascades correctly via URP internal logic
+                output.shadowCoord = TransformWorldToShadowCoord(vertexInput.positionWS);
 
                 return output;
             }
@@ -292,8 +309,7 @@ Shader "Dynamic Lighting/URP/Metallic"
                     {
                         DynamicLight light = dynamic_lights[k];
                         #if defined(DYNAMIC_LIGHTING_DYNAMIC_GEOMETRY_DISTANCE_CUBES) || defined(DYNAMIC_LIGHTING_DYNAMIC_GEOMETRY_ANGULAR)
-                            int dynamicGeometryLightIndex = (k < dynamic_lights_count) ? (int)k : -1;
-                            ProcessLight(light, i_original, dynamic_triangle, dynamicGeometryLightIndex, is_front_face, DYNLIT_FRAGMENT_LIGHT_IN_PARAMETERS);
+                            ProcessLight(light, i_original, dynamic_triangle, (int)k, is_front_face, DYNLIT_FRAGMENT_LIGHT_IN_PARAMETERS);
                         #else
                             ProcessLight(light, i_original, dynamic_triangle, -1, is_front_face, DYNLIT_FRAGMENT_LIGHT_IN_PARAMETERS);
                         #endif
@@ -312,6 +328,37 @@ Shader "Dynamic Lighting/URP/Metallic"
                     }
                 }
                 #endif
+
+
+                
+                // -------------------------------------------------------------------------
+                // Unity Light Support (Main Light + Additional Lights)
+                // -------------------------------------------------------------------------
+                
+                BRDFData brdfData;
+                // Initialize BRDFData using the surface properties we already gathered.
+                // Note: F0 (specular color) was calculated as lerp(0.04, albedo, metallic).
+                // smoothness is 1.0 - roughness.
+                InitializeBRDFData(albedo.rgb, metallic, F0, 1.0 - roughness, albedo.a, brdfData);
+
+                // 1. Main Light
+                Light mainLight = GetMainLight(i.shadowCoord, i.positionWS, half4(1,1,1,1));
+                Lo += LightingPhysicallyBased(brdfData, mainLight, N, V);
+
+                // 2. Additional Lights
+                uint pixelLightCount = GetAdditionalLightsCount();
+
+                // Forward+ Clustered Lighting Support
+                InputData inputData = (InputData)0;
+                inputData.positionWS = i.positionWS;
+                inputData.normalizedScreenSpaceUV = GetNormalizedScreenSpaceUV(i.positionCS);
+
+                LIGHT_LOOP_BEGIN(pixelLightCount)
+                    Light light = GetAdditionalLight(lightIndex, i.positionWS, half4(1,1,1,1));
+                    Lo += LightingPhysicallyBased(brdfData, light, N, V);
+                LIGHT_LOOP_END
+
+                // -------------------------------------------------------------------------
 
                 // Clamp lighting to prevent FP16 overflow on NVIDIA/Vulkan
                 Lo = min(Lo, float3(65000.0, 65000.0, 65000.0));
@@ -362,7 +409,7 @@ Shader "Dynamic Lighting/URP/Metallic"
                 color = MixFog(color, i.fogCoord);
 
                 // Final clamp for framebuffer
-                return float4(saturate(color), albedo.a);
+                return float4(color, albedo.a);
             }
 
 #else
@@ -396,6 +443,7 @@ Shader "Dynamic Lighting/URP/Metallic"
             #pragma vertex ShadowPassVertex
             #pragma fragment ShadowPassFragment
             #pragma multi_compile_instancing
+            #pragma multi_compile_shadowcaster
             #pragma shader_feature_local _ _ALPHATEST_ON
 
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"

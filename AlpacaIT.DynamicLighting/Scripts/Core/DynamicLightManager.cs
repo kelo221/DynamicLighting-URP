@@ -346,6 +346,9 @@ namespace AlpacaIT.DynamicLighting
         /// <summary>Stores the 6 camera frustum planes, for the non-alloc version of <see cref="GeometryUtility.CalculateFrustumPlanes"/>.</summary>
         private Plane[] cameraFrustumPlanes = new Plane[6];
 
+        /// <summary>Tracks the most recent frame for which the once-per-frame update work ran.</summary>
+        private int lastPreparedFrame = -1;
+
         /// <summary>The interval in seconds from the last frame to the current one (<see cref="Time.deltaTime"/>).</summary>
         private float deltaTime;
 
@@ -552,6 +555,7 @@ namespace AlpacaIT.DynamicLighting
             // only execute the rest if not initialized yet.
             if (isInitialized) return;
             isInitialized = true;
+            lastPreparedFrame = -1;
 
             // prepare event arguments for common callbacks.
             dynamicLightingPreUpdateEventArgs = new DynamicLightingPreUpdateEventArgs(this);
@@ -575,6 +579,9 @@ namespace AlpacaIT.DynamicLighting
             Camera.onPreRender += EditorOnPreRenderCallback;
             Camera.onPostRender += EditorOnPostRenderCallback;
 #endif
+#endif
+#if UNITY_PIPELINE_URP
+            RenderPipelineManager.beginCameraRendering += OnBeginCameraRendering;
 #endif
             // -> partial class DynamicLightManager.Shaders initialize.
             ShadersInitialize();
@@ -779,6 +786,7 @@ namespace AlpacaIT.DynamicLighting
 
             if (!isInitialized) return;
             isInitialized = false;
+            lastPreparedFrame = -1;
 
 #if UNITY_EDITOR
             // in the editor, unsubscribe from the camera rendering functions that repair preview cameras.
@@ -789,6 +797,9 @@ namespace AlpacaIT.DynamicLighting
             Camera.onPreRender -= EditorOnPreRenderCallback;
             Camera.onPostRender -= EditorOnPostRenderCallback;
 #endif
+#endif
+#if UNITY_PIPELINE_URP
+            RenderPipelineManager.beginCameraRendering -= OnBeginCameraRendering;
 #endif
 
             // always disable the bounding volume hierarchy in the shader as it's dangerous now.
@@ -970,158 +981,122 @@ namespace AlpacaIT.DynamicLighting
         /// <summary>This handles the CPU side lighting effects.</summary>
         private unsafe void Update()
         {
-            // callback for third-party developers.
-            preUpdate?.Invoke(this, dynamicLightingPreUpdateEventArgs);
+            PrepareFrameState();
 
-            // get the time values once as they are expensive native calls.
-            deltaTime = Time.deltaTime;
-            timeTime = Time.time;
-
-            // try to find the main camera in the scene.
-            var camera = Camera.main;
-
+#if UNITY_PIPELINE_URP
+            if (GraphicsSettings.currentRenderPipeline != null)
+            {
 #if UNITY_EDITOR
-            // editor scene view support.
-            if (!editorIsPlaying)
-            {
-                // try using the scene view or current camera.
-                var sceneViewCamera = Utilities.GetSceneViewCamera();
-
-                // if the scene view camera does not exist then fallback to the main camera.
-                if (sceneViewCamera != null)
-                    camera = sceneViewCamera;
+                EditorHandleMeshEdits();
+#endif
+                postUpdate?.Invoke(this, dynamicLightingPostUpdateEventArgs);
+                return;
             }
-            else
-            {
-                Debug.Assert(camera != null, "Could not find a camera that is tagged \"MainCamera\" for lighting calculations.");
-            }
+#endif
 
-            // if no camera exists in the editor then we stop processing.
+            var camera = GetLightingCamera();
             if (camera == null)
                 return;
 
-            // respect the scene view lighting toggle.
-            {
-                var sceneView = UnityEditor.SceneView.lastActiveSceneView;
-                if (sceneView)
-                {
-                    // check the focused editor window to determine whether it was most recently a
-                    // game view (true) or a scene view (false).
-                    var focusedWindow = UnityEditor.EditorWindow.focusedWindow;
-                    if (focusedWindow != null)
-                    {
-                        var focusedWindowType = focusedWindow.GetType();
-                        if (focusedWindowType == editorGameViewType)
-                            editorLastViewWasGame = true;
-                        else if (focusedWindowType == typeof(UnityEditor.SceneView))
-                            editorLastViewWasGame = false;
-                    }
+            PrepareLightingForCamera(camera);
 
-                    // apply the unlit rendering property.
-                    if (renderUnlit)
-                        ShadersSetKeywordLitEnabled(false);
-                    else if (editorLastViewWasGame)
-                        ShadersSetKeywordLitEnabled(true);
-                    else
-                        ShadersSetKeywordLitEnabled(sceneView.sceneLighting);
-                }
-                else
-                {
-                    // there is no scene view.
-                    editorLastViewWasGame = true;
-
-                    // apply the unlit rendering property.
-                    ShadersSetKeywordLitEnabled(!renderUnlit);
-                }
-            }
-#else
-            // apply the unlit rendering property.
-            ShadersSetKeywordLitEnabled(!renderUnlit);
+#if UNITY_EDITOR
+            EditorHandleMeshEdits();
 #endif
-            var raycastedDynamicLightsCount = raycastedDynamicLights.Count;
+            postUpdate?.Invoke(this, dynamicLightingPostUpdateEventArgs);
+        }
 
-            // if the budget changed we must recreate the shader buffers.
-            var totalLightBudget = raycastedDynamicLightsCount + realtimeLightBudget;
-            if (totalLightBudget == 0) return; // sanity check.
+        /// <summary>Performs the work that only needs to happen once per frame.</summary>
+        private void PrepareFrameState()
+        {
+            if (lastPreparedFrame == Time.frameCount)
+                return;
+
+            lastPreparedFrame = Time.frameCount;
+
+            preUpdate?.Invoke(this, dynamicLightingPreUpdateEventArgs);
+
+            deltaTime = Time.deltaTime;
+            timeTime = Time.time;
+
+            ApplyLightingViewState();
+
+            var raycastedDynamicLightsCount = raycastedDynamicLights.Count;
             if (shaderDynamicLights.Length != totalLightBudget)
                 ReallocateShaderLightBuffer();
 
-            // -> partial class DynamicLightManager.LightPositions.
             LightPositionsUpdate();
 
-            // always process the raycasted dynamic lights.
             for (int i = 0; i < raycastedDynamicLightsCount; i++)
             {
                 var raycastedDynamicLight = raycastedDynamicLights[i];
-
-                // destroyed raycasted lights in the scene, must still exist in the shader.
                 if (!raycastedDynamicLight.lightAvailable) continue;
 
                 var light = raycastedDynamicLight.light;
                 var lightCache = light.cache;
 
-                // when a raycasted light position has been moved away from the origin:
                 lightCache.transformPosition = lightPositionsRaycastedLightPositions[i];
                 lightCache.transformScale = lightPositionsRaycastedLightScales[i];
                 if (!lightCache.transformPosition.ApproximatelyEquals(raycastedDynamicLight.origin))
                 {
                     if (!lightCache.movedFromOrigin)
                     {
-                        // add it to the realtime lights and disable the raycasted light.
                         sceneRealtimeLights.Add(light);
                         lightCache.movedFromOrigin = true;
                     }
-
-                    // we skip the update here as that's done for realtime lights later.
                 }
                 else
                 {
-                    // when a raycasted light position has been restored to the origin:
                     if (lightCache.movedFromOrigin)
                     {
-                        // remove it from the realtime lights and enable the raycasted light.
                         sceneRealtimeLights.Remove(light);
                         lightCache.movedFromOrigin = false;
                     }
 
-                    // we must always update the fixed timestep calculator as it relies on Time.deltaTime.
                     lightCache.fixedTimestep.timePerStep = light.lightEffectTimestepFrequency;
                     lightCache.fixedTimestep.Update(deltaTime);
+                    UpdateLightEffects(light, true);
                 }
             }
 
-            // clear as many active lights as possible.
-            activeRealtimeLights.Clear();
-
-            // update the cached realtime light positions (required for fast sorting).
             var sceneRealtimeLightsCount = sceneRealtimeLights.Count;
             if (sceneRealtimeLightsCount > 0)
             {
                 UpdateSceneRealtimeLightPositionsInCache();
+
+                for (int i = 0; i < sceneRealtimeLightsCount; i++)
+                {
+                    var realtimeLight = sceneRealtimeLights[i];
+                    realtimeLight.cache.fixedTimestep.timePerStep = realtimeLight.lightEffectTimestepFrequency;
+                    realtimeLight.cache.fixedTimestep.Update(deltaTime);
+                    UpdateLightEffects(realtimeLight, true);
+                }
             }
 
-            // if we exceed the realtime light budget we sort the realtime lights by distance every
-            // frame, as we will assume they are moving around.
+            ShadersSetGlobalDynamicAmbientColor(ambientColor);
+            ShadersSetRuntimeQuality(runtimeQuality);
+        }
+
+        /// <summary>Performs the work that depends on the camera currently rendering.</summary>
+        private unsafe void PrepareLightingForCamera(Camera camera)
+        {
+            var raycastedDynamicLightsCount = raycastedDynamicLights.Count;
+
+            activeRealtimeLights.Clear();
+
+            var sceneRealtimeLightsCount = sceneRealtimeLights.Count;
             if (sceneRealtimeLightsCount > realtimeLightBudget)
-            {
                 SortSceneRealtimeLights(camera.transform.position);
-            }
 
-            // we calculate the camera frustum planes to cull realtime lights and realtime shadows.
             GeometryUtility.CalculateFrustumPlanes(camera, cameraFrustumPlanes);
 
-            // fill the active realtime lights back up with the closest lights.
             for (int i = 0; i < sceneRealtimeLightsCount; i++)
             {
                 var realtimeLight = sceneRealtimeLights[i];
 
-                // we must always update the fixed timestep calculator as it relies on Time.deltaTime.
-                realtimeLight.cache.fixedTimestep.timePerStep = realtimeLight.lightEffectTimestepFrequency;
-                realtimeLight.cache.fixedTimestep.Update(deltaTime);
-
                 if (activeRealtimeLights.Count < realtimeLightBudget)
                 {
-#if UNITY_EDITOR    // optimization: only add lights that are within the camera frustum.
+#if UNITY_EDITOR
                     if (!editorIsPlaying || MathEx.CheckSphereIntersectsFrustum(cameraFrustumPlanes, realtimeLight.cache.transformPosition, realtimeLight.largestLightRadius))
 #else
                     if (MathEx.CheckSphereIntersectsFrustum(cameraFrustumPlanes, realtimeLight.cache.transformPosition, realtimeLight.largestLightRadius))
@@ -1132,14 +1107,9 @@ namespace AlpacaIT.DynamicLighting
                 }
             }
 
-            // -> partial class DynamicLightManager.LightCookie.
             LightCookieUpdate();
-
-            // we are going to iterate over all active shader light sources below, we make use of
-            // this opportunity, to filter out volumetric light sources for post processing.
             postProcessingVolumetricLightsCount = 0;
 
-            // write the active lights into the shader data.
             var activeRealtimeLightsCount = activeRealtimeLights.Count;
             fixed (ShaderDynamicLight* shaderLightsPtr = shaderDynamicLights)
             {
@@ -1152,19 +1122,13 @@ namespace AlpacaIT.DynamicLighting
                     var lightAvailable = raycastedDynamicLight.lightAvailable;
                     var lightBounceCompression = raycastedDynamicLight.bounceCompression;
                     SetShaderDynamicLight(shaderLight, light, lightBounceCompression, lightAvailable, false);
-                    UpdateLightEffects(shaderLight, light, lightAvailable);
+                    ApplyLightEffects(shaderLight, light, lightAvailable);
                     idx++;
 
                     if (lightAvailable)
                     {
-                        // -> partial class DynamicLightManager.ShadowCamera.
                         ShadowCameraProcessLight(shaderLight, light);
-
-                        // -> partial class DynamicLightManager.LightCookie.
                         LightCookieProcessLight(shaderLight, light);
-
-                        // copy volumetric light sources into the post processing system.
-                        // -> partial class DynamicLightManager.PostProcessing.
                         PostProcessingProcessLight(shaderLight, light);
                     }
                 }
@@ -1175,111 +1139,157 @@ namespace AlpacaIT.DynamicLighting
                     var shaderLight = &shaderLightsPtr[idx];
                     bool lightAvailable = light;
                     SetShaderDynamicLight(shaderLight, light, DynamicBounceLightingCompressionMode.Inherit, lightAvailable, true);
-                    UpdateLightEffects(shaderLight, light, lightAvailable);
+                    ApplyLightEffects(shaderLight, light, lightAvailable);
                     idx++;
 
                     if (lightAvailable)
                     {
-                        // -> partial class DynamicLightManager.ShadowCamera.
                         ShadowCameraProcessLight(shaderLight, light);
-
-                        // -> partial class DynamicLightManager.LightCookie.
                         LightCookieProcessLight(shaderLight, light);
-
-                        // copy volumetric light sources into the post processing system.
-                        // -> partial class DynamicLightManager.PostProcessing.
                         PostProcessingProcessLight(shaderLight, light);
                     }
                 }
             }
 
-            // -> partial class DynamicLightManager.ShadowCamera.
             ShadowCameraPostUpdate();
 
-            // upload the active light data to the graphics card.
             var activeDynamicLightsCount = raycastedDynamicLightsCount + activeRealtimeLightsCount;
             if (dynamicLightsBuffer != null && dynamicLightsBuffer.IsValid())
             {
                 dynamicLightsBuffer.SetData(shaderDynamicLights, 0, 0, activeDynamicLightsCount);
                 ShadersSetGlobalDynamicLights(dynamicLightsBuffer);
             }
+
             ShadersSetGlobalDynamicLightsCount(raycastedDynamicLightsCount);
             ShadersSetGlobalRealtimeLightsCount(activeRealtimeLightsCount);
+        }
 
-            // update the ambient lighting color.
-            ShadersSetGlobalDynamicAmbientColor(ambientColor);
-
-            // update the runtime quality settings.
-            ShadersSetRuntimeQuality(runtimeQuality);
+        /// <summary>Finds the camera used for the legacy single-camera path.</summary>
+        private Camera GetLightingCamera()
+        {
+            var camera = Camera.main;
 
 #if UNITY_EDITOR
-            // detect mesh changes in edit mode.
             if (!editorIsPlaying)
             {
-                // check in batches of 100 mesh renderers (editor performance in large scenes).
-                var raycastedMeshRenderersCount = raycastedMeshRenderers.Count;
-                var loopBegin = editorMeshEditDetectionOffset;
-                var loopEnd = Math.Min(loopBegin + 100, raycastedMeshRenderersCount);
-                editorMeshEditDetectionOffset += 100;
-                if (loopEnd == raycastedMeshRenderersCount)
-                    editorMeshEditDetectionOffset = 0;
-
-                for (int i = loopBegin; i < loopEnd; i++)
-                {
-                    // for every game object that requires a lightmap:
-                    var lightmap = raycastedMeshRenderers[i];
-
-                    // make sure this object has not already been cleaned.
-                    if (lightmap.lastMeshModified) continue;
-
-                    // make sure the scene reference is still valid.
-                    var meshRenderer = lightmap.renderer;
-                    if (!meshRenderer) continue;
-
-                    // make sure the mesh filter is still valid.
-                    var meshFilter = lightmap.lastMeshFilter;
-                    if (!meshFilter)
-                    {
-                        cleanupMaterialPropertyBlock();
-                        continue;
-                    }
-
-                    // make sure the mesh is still valid.
-                    var mesh = meshFilter.sharedMesh;
-                    if (!mesh)
-                    {
-                        cleanupMaterialPropertyBlock();
-                        continue;
-                    }
-
-                    // if the hash has changed (likely a significant mesh edit):
-                    if (mesh.GetFastHash() != lightmap.lastMeshHash)
-                    {
-                        cleanupMaterialPropertyBlock();
-                        continue;
-                    }
-
-                    // temporarily disables dynamic lighting on the current renderer.
-                    void cleanupMaterialPropertyBlock()
-                    {
-                        // remember that this mesh was modified.
-                        lightmap.lastMeshModified = true;
-
-                        // remove the lightmap data from the material property block.
-                        CleanupMaterialPropertyBlock(lightmap);
-
-                        // try to get the mesh name.
-                        var meshName = meshFilter ? $" ({meshFilter.name})" : "";
-
-                        // inform the user about the reason for the visual change.
-                        Debug.LogWarning($"Temporarily disabled Dynamic Lighting for {meshRenderer.name}{meshName}.\nA change in the mesh was detected, which is expected when editing level geometry. Please raytrace your scene again once you have finished editing. If you're curious about the reason for this action, hit play now to see for yourself.", meshRenderer);
-                    }
-                }
+                var sceneViewCamera = Utilities.GetSceneViewCamera();
+                if (sceneViewCamera != null)
+                    camera = sceneViewCamera;
+            }
+            else
+            {
+                Debug.Assert(camera != null, "Could not find a camera that is tagged \"MainCamera\" for lighting calculations.");
             }
 #endif
-            // callback for third-party developers.
-            postUpdate?.Invoke(this, dynamicLightingPostUpdateEventArgs);
+
+            return camera;
         }
+
+        /// <summary>Applies view-state toggles that do not depend on the currently rendering camera.</summary>
+        private void ApplyLightingViewState()
+        {
+#if UNITY_EDITOR
+            var sceneView = UnityEditor.SceneView.lastActiveSceneView;
+            if (sceneView)
+            {
+                var focusedWindow = UnityEditor.EditorWindow.focusedWindow;
+                if (focusedWindow != null)
+                {
+                    var focusedWindowType = focusedWindow.GetType();
+                    if (focusedWindowType == editorGameViewType)
+                        editorLastViewWasGame = true;
+                    else if (focusedWindowType == typeof(UnityEditor.SceneView))
+                        editorLastViewWasGame = false;
+                }
+
+                if (renderUnlit)
+                    ShadersSetKeywordLitEnabled(false);
+                else if (editorLastViewWasGame)
+                    ShadersSetKeywordLitEnabled(true);
+                else
+                    ShadersSetKeywordLitEnabled(sceneView.sceneLighting);
+            }
+            else
+            {
+                editorLastViewWasGame = true;
+                ShadersSetKeywordLitEnabled(!renderUnlit);
+            }
+#else
+            ShadersSetKeywordLitEnabled(!renderUnlit);
+#endif
+        }
+
+#if UNITY_PIPELINE_URP
+        /// <summary>Prepares camera-specific lighting state for each URP camera render.</summary>
+        private void OnBeginCameraRendering(ScriptableRenderContext scriptableRenderContext, Camera camera)
+        {
+            if (!isInitialized || camera == null)
+                return;
+
+            if (camera == shadowCamera)
+                return;
+
+            if (camera.cameraType != CameraType.Game && camera.cameraType != CameraType.SceneView)
+                return;
+
+            PrepareFrameState();
+            PrepareLightingForCamera(camera);
+        }
+#endif
+
+#if UNITY_EDITOR
+        /// <summary>Detects edited meshes in the editor and disables stale lightmap data.</summary>
+        private void EditorHandleMeshEdits()
+        {
+            if (editorIsPlaying)
+                return;
+
+            var raycastedMeshRenderersCount = raycastedMeshRenderers.Count;
+            var loopBegin = editorMeshEditDetectionOffset;
+            var loopEnd = Math.Min(loopBegin + 100, raycastedMeshRenderersCount);
+            editorMeshEditDetectionOffset += 100;
+            if (loopEnd == raycastedMeshRenderersCount)
+                editorMeshEditDetectionOffset = 0;
+
+            for (int i = loopBegin; i < loopEnd; i++)
+            {
+                var lightmap = raycastedMeshRenderers[i];
+                if (lightmap.lastMeshModified) continue;
+
+                var meshRenderer = lightmap.renderer;
+                if (!meshRenderer) continue;
+
+                var meshFilter = lightmap.lastMeshFilter;
+                if (!meshFilter)
+                {
+                    cleanupMaterialPropertyBlock();
+                    continue;
+                }
+
+                var mesh = meshFilter.sharedMesh;
+                if (!mesh)
+                {
+                    cleanupMaterialPropertyBlock();
+                    continue;
+                }
+
+                if (mesh.GetFastHash() != lightmap.lastMeshHash)
+                {
+                    cleanupMaterialPropertyBlock();
+                    continue;
+                }
+
+                void cleanupMaterialPropertyBlock()
+                {
+                    lightmap.lastMeshModified = true;
+                    CleanupMaterialPropertyBlock(lightmap);
+
+                    var meshName = meshFilter ? $" ({meshFilter.name})" : "";
+                    Debug.LogWarning($"Temporarily disabled Dynamic Lighting for {meshRenderer.name}{meshName}.\nA change in the mesh was detected, which is expected when editing level geometry. Please raytrace your scene again once you have finished editing. If you're curious about the reason for this action, hit play now to see for yourself.", meshRenderer);
+                }
+            }
+        }
+#endif
 
         /// <summary>
         /// Updates all of the <see cref="DynamicLight.cache"/><see
@@ -1490,7 +1500,7 @@ namespace AlpacaIT.DynamicLighting
             }
         }
 
-        private unsafe void UpdateLightEffects(ShaderDynamicLight* shaderLight, DynamicLight light, bool lightAvailable)
+        private void UpdateLightEffects(DynamicLight light, bool lightAvailable)
         {
             // destroyed raycasted lights in the scene, must still exist in the shader.
             if (!lightAvailable) return;
@@ -1578,13 +1588,20 @@ namespace AlpacaIT.DynamicLighting
                 }
             }
 
+        }
+
+        /// <summary>Assigns the cached light effect values to the shader light data.</summary>
+        private unsafe void ApplyLightEffects(ShaderDynamicLight* shaderLight, DynamicLight light, bool lightAvailable)
+        {
+            if (!lightAvailable) return;
+
             // assign the cached values to the shader lights.
 
-            shaderLight->intensity = light.lightIntensity * lightCache.intensity;
+            shaderLight->intensity = light.lightIntensity * light.cache.intensity;
 
             if (light.lightVolumetricType != DynamicLightVolumetricType.None)
             {
-                shaderLight->volumetricIntensity = light.lightVolumetricIntensity * lightCache.intensity;
+                shaderLight->volumetricIntensity = light.lightVolumetricIntensity * light.cache.intensity;
             }
         }
 
