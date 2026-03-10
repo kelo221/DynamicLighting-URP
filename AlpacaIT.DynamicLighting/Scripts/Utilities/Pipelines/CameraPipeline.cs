@@ -1,4 +1,4 @@
-﻿using System.Runtime.CompilerServices;
+using System.Runtime.CompilerServices;
 using UnityEngine;
 
 namespace AlpacaIT.DynamicLighting
@@ -88,13 +88,16 @@ namespace AlpacaIT.DynamicLighting
             private static readonly System.Collections.Generic.List<UnityEngine.Rendering.ShaderTagId> m_ShaderTagIdList = new System.Collections.Generic.List<UnityEngine.Rendering.ShaderTagId>
             {
                 new UnityEngine.Rendering.ShaderTagId("UniversalForward"),
+                new UnityEngine.Rendering.ShaderTagId("UniversalForwardOnly"),
+                new UnityEngine.Rendering.ShaderTagId("UniversalGBuffer"),
+                new UnityEngine.Rendering.ShaderTagId("LightweightForward"),
                 new UnityEngine.Rendering.ShaderTagId("SRPDefaultUnlit")
             };
 
             public ReplacementShaderPass(Material replacementMaterial)
             {
                 this.replacementMaterial = replacementMaterial;
-                renderPassEvent = UnityEngine.Rendering.Universal.RenderPassEvent.AfterRenderingOpaques;
+                renderPassEvent = UnityEngine.Rendering.Universal.RenderPassEvent.AfterRenderingTransparents;
             }
 
             public override void RecordRenderGraph(UnityEngine.Rendering.RenderGraphModule.RenderGraph renderGraph, UnityEngine.Rendering.ContextContainer frameContext)
@@ -107,34 +110,90 @@ namespace AlpacaIT.DynamicLighting
                     var lightData = frameContext.Get<UnityEngine.Rendering.Universal.UniversalLightData>();
                     var resourceData = frameContext.Get<UnityEngine.Rendering.Universal.UniversalResourceData>();
 
-                    // setup drawing and filtering.
-                    var sortingCriteria = cameraData.defaultOpaqueSortFlags;
-                    var drawingSettings = UnityEngine.Rendering.Universal.RenderingUtils.CreateDrawingSettings(m_ShaderTagIdList, renderingData, cameraData, lightData, sortingCriteria);
-                    drawingSettings.overrideMaterial = replacementMaterial;
-                    drawingSettings.overrideMaterialPassIndex = 0;
+                    // Draw opaque, alpha-test, and transparent queues separately so cutout casters
+                    // can use the alpha-aware replacement pass without affecting fully opaque objects.
+                    var opaqueDrawingSettings = UnityEngine.Rendering.Universal.RenderingUtils.CreateDrawingSettings(
+                        m_ShaderTagIdList,
+                        renderingData,
+                        cameraData,
+                        lightData,
+                        cameraData.defaultOpaqueSortFlags);
+                    opaqueDrawingSettings.overrideMaterial = replacementMaterial;
+                    opaqueDrawingSettings.overrideMaterialPassIndex = 0;
 
-                    var filteringSettings = new UnityEngine.Rendering.FilteringSettings(UnityEngine.Rendering.RenderQueueRange.opaque);
+                    var opaqueFilteringSettings = new UnityEngine.Rendering.FilteringSettings(new UnityEngine.Rendering.RenderQueueRange
+                    {
+                        lowerBound = 0,
+                        upperBound = 2449
+                    });
+                    var opaqueRendererListParams = new UnityEngine.Rendering.RendererListParams(
+                        renderingData.cullResults,
+                        opaqueDrawingSettings,
+                        opaqueFilteringSettings);
+                    passData.opaqueRendererListHandle = renderGraph.CreateRendererList(opaqueRendererListParams);
 
-                    // Create renderer list params and handle.
-                    var rendererListParams = new UnityEngine.Rendering.RendererListParams(renderingData.cullResults, drawingSettings, filteringSettings);
-                    passData.rendererListHandle = renderGraph.CreateRendererList(rendererListParams);
+                    var alphaTestDrawingSettings = UnityEngine.Rendering.Universal.RenderingUtils.CreateDrawingSettings(
+                        m_ShaderTagIdList,
+                        renderingData,
+                        cameraData,
+                        lightData,
+                        cameraData.defaultOpaqueSortFlags);
+                    alphaTestDrawingSettings.overrideMaterial = replacementMaterial;
+                    alphaTestDrawingSettings.overrideMaterialPassIndex = 1;
+
+                    var alphaTestFilteringSettings = new UnityEngine.Rendering.FilteringSettings(new UnityEngine.Rendering.RenderQueueRange
+                    {
+                        lowerBound = 2450,
+                        upperBound = 2500
+                    });
+                    var alphaTestRendererListParams = new UnityEngine.Rendering.RendererListParams(
+                        renderingData.cullResults,
+                        alphaTestDrawingSettings,
+                        alphaTestFilteringSettings);
+                    passData.alphaTestRendererListHandle = renderGraph.CreateRendererList(alphaTestRendererListParams);
+
+                    var transparentDrawingSettings = UnityEngine.Rendering.Universal.RenderingUtils.CreateDrawingSettings(
+                        m_ShaderTagIdList,
+                        renderingData,
+                        cameraData,
+                        lightData,
+                        UnityEngine.Rendering.SortingCriteria.CommonTransparent);
+                    transparentDrawingSettings.overrideMaterial = replacementMaterial;
+                    transparentDrawingSettings.overrideMaterialPassIndex = 1;
+
+                    var transparentFilteringSettings = new UnityEngine.Rendering.FilteringSettings(new UnityEngine.Rendering.RenderQueueRange
+                    {
+                        lowerBound = 2501,
+                        upperBound = 5000
+                    });
+                    var transparentRendererListParams = new UnityEngine.Rendering.RendererListParams(
+                        renderingData.cullResults,
+                        transparentDrawingSettings,
+                        transparentFilteringSettings);
+                    passData.transparentRendererListHandle = renderGraph.CreateRendererList(transparentRendererListParams);
 
                     // Declare usage and attachments (draw to active camera buffers).
-                    builder.UseRendererList(passData.rendererListHandle);
+                    builder.UseRendererList(passData.opaqueRendererListHandle);
+                    builder.UseRendererList(passData.alphaTestRendererListHandle);
+                    builder.UseRendererList(passData.transparentRendererListHandle);
                     builder.SetRenderAttachment(resourceData.activeColorTexture, 0);
                     builder.SetRenderAttachmentDepth(resourceData.activeDepthTexture, UnityEngine.Rendering.RenderGraphModule.AccessFlags.Write);
 
                     // Define the execute function (static to avoid allocations).
                     builder.SetRenderFunc(static (PassData data, UnityEngine.Rendering.RenderGraphModule.RasterGraphContext rgContext) =>
                     {
-                        rgContext.cmd.DrawRendererList(data.rendererListHandle);
+                        rgContext.cmd.DrawRendererList(data.opaqueRendererListHandle);
+                        rgContext.cmd.DrawRendererList(data.alphaTestRendererListHandle);
+                        rgContext.cmd.DrawRendererList(data.transparentRendererListHandle);
                     });
                 }
             }
 
             private class PassData
             {
-                public UnityEngine.Rendering.RenderGraphModule.RendererListHandle rendererListHandle;
+                public UnityEngine.Rendering.RenderGraphModule.RendererListHandle opaqueRendererListHandle;
+                public UnityEngine.Rendering.RenderGraphModule.RendererListHandle alphaTestRendererListHandle;
+                public UnityEngine.Rendering.RenderGraphModule.RendererListHandle transparentRendererListHandle;
             }
         }
     }

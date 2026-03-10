@@ -21,5 +21,6 @@
   "version": "1.316.0",
   "dependencies": {
     "com.unity.mathematics": "1.1.0"
-  }
+  },
+  "_fingerprint": "b8147722bdfa0e21699b3c7357b0521a1055ca81"
 }
