@@ -7,8 +7,13 @@ namespace AlpacaIT.DynamicLighting
     /// </summary>
     internal static class DirectX12
     {
-        /// <summary>The global fallback shader buffer for strict graphics APIs.</summary>
-        private static ComputeBuffer dynamicTrianglesGlobalBuffer;
+        /// <summary>
+        /// The global shader buffer "dynamic_triangles" for DirectX12 compatibility, which requires
+        /// all buffers to be assigned. The "dynamic_triangles" buffer is only set using Material
+        /// Property Blocks, so Unity will complain whenever this is not the case. MPBs have
+        /// priority over global shader variables.
+        /// </summary>
+        public static ComputeBuffer dynamicTrianglesGlobalBuffer;
 
         private static bool RequiresFallbackBuffers()
         {
