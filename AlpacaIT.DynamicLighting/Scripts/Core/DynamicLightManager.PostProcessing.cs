@@ -8,6 +8,8 @@ namespace AlpacaIT.DynamicLighting
 
     public partial class DynamicLightManager
     {
+        private static int _postProcessingDebugLogBudget = 0;
+
         /// <summary>
         /// The <see cref="ComputeBuffer"/> used to replace <see cref="dynamicLightsBuffer"/> during rendering.
         /// </summary>
@@ -118,6 +120,17 @@ namespace AlpacaIT.DynamicLighting
                         volumetricLight->forward = volumetricLight->up;
                         break;
                 }
+
+                if (_postProcessingDebugLogBudget > 0)
+                {
+                    _postProcessingDebugLogBudget--;
+                    Debug.Log(
+                        $"DynamicLighting Volumetric Upload: name='{light.name}', " +
+                        $"type={light.lightVolumetricType}, pos={volumetricLight->position}, " +
+                        $"radius={volumetricLight->radiusSqr}, thickness={volumetricLight->gpFloat1}, " +
+                        $"intensity={volumetricLight->volumetricIntensity}, visibilityInv={volumetricLight->volumetricVisibility}, " +
+                        $"channel={volumetricLight->channel}");
+                }
             }
         }
 
@@ -126,6 +139,8 @@ namespace AlpacaIT.DynamicLighting
         {
             // we require that we are fully initialized.
             if (!isInitialized) return;
+
+            _postProcessingDebugLogBudget = 3;
 
             // upload the volumetric light sources to the graphics card.
             if (postProcessingVolumetricLightsCount > 0)

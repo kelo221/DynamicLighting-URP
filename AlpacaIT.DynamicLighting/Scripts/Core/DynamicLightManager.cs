@@ -304,7 +304,7 @@ namespace AlpacaIT.DynamicLighting
         /// <para>Tip: Consider using the <see cref="initialized"/> event to set this field.</para>
         /// </summary>
         [NonSerialized]
-        public DynamicLightingRuntimeQuality runtimeQuality = DynamicLightingRuntimeQuality.Medium;
+        public DynamicLightingRuntimeQuality runtimeQuality = DynamicLightingRuntimeQuality.High;
 
         /// <summary>
         /// Internally used to detect changes to <see cref="runtimeQuality"/> to prevent unnecessary

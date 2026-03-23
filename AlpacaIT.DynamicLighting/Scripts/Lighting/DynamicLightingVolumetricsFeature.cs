@@ -16,6 +16,8 @@ namespace AlpacaIT.DynamicLighting
         public class Settings
         {
             public RenderPassEvent renderPassEvent = RenderPassEvent.BeforeRenderingPostProcessing;
+            public bool debugLogging = false;
+            public int debugViewMode = 0;
         }
 
         public Settings settings = new Settings();
@@ -50,7 +52,9 @@ namespace AlpacaIT.DynamicLighting
             
             _pass = new DynamicLightingVolumetricsPass(_material)
             {
-                renderPassEvent = settings.renderPassEvent
+                renderPassEvent = settings.renderPassEvent,
+                debugLogging = settings.debugLogging,
+                debugViewMode = settings.debugViewMode
             };
         }
 
@@ -67,6 +71,12 @@ namespace AlpacaIT.DynamicLighting
 
             if (_material == null)
                 return;
+
+            var camera = renderingData.cameraData.camera;
+            if (camera != null)
+            {
+                camera.depthTextureMode |= DepthTextureMode.Depth;
+            }
 
             // Note: We don't check postProcessingVolumetricLightsCount here because it may not
             // be populated yet (timing depends on Update vs render order). The check is done
@@ -104,7 +114,11 @@ namespace AlpacaIT.DynamicLighting
         private RTHandle _tempRT;
         private static readonly int ClipToWorldId = Shader.PropertyToID("clipToWorld");
         private static readonly int CameraPosId = Shader.PropertyToID("_DL_WorldSpaceCameraPos");
+        private static readonly int DebugViewModeId = Shader.PropertyToID("_DL_DebugViewMode");
         private ProfilingSampler _profilingSampler;
+        private int _debugFrameCounter;
+        public bool debugLogging { get; set; }
+        public int debugViewMode { get; set; }
 
         public DynamicLightingVolumetricsPass(Material material)
         {
@@ -118,10 +132,12 @@ namespace AlpacaIT.DynamicLighting
         {
             public TextureHandle source;
             public TextureHandle destination;
+            public TextureHandle depth;
             public Material material;
             public DynamicLightManager manager;
             public Matrix4x4 clipToWorld;
             public Vector3 cameraPosition;
+            public int debugViewMode;
         }
 
         private static bool _loggedZeroLightsOnce = false;
@@ -152,8 +168,6 @@ namespace AlpacaIT.DynamicLighting
                 }
                 return;
             }
-            
-            Debug.Log($"DynamicLighting Volumetrics: Rendering {manager.postProcessingVolumetricLightsCount} volumetric lights");
 
             var resourceData = frameData.Get<UniversalResourceData>();
             var cameraData = frameData.Get<UniversalCameraData>();
@@ -168,6 +182,14 @@ namespace AlpacaIT.DynamicLighting
             var clipToWorld = (projectionMatrix * viewMatrix).inverse;
 
             var source = resourceData.activeColorTexture;
+            var depth = resourceData.activeDepthTexture;
+            if (debugLogging && (++_debugFrameCounter % 120) == 0)
+            {
+                Debug.Log(
+                    $"DynamicLighting Volumetrics: lights={manager.postProcessingVolumetricLightsCount}, " +
+                    $"camera='{cameraData.camera.name}', depthValid={depth.IsValid()}, " +
+                    $"sourceValid={source.IsValid()}, debugViewMode={debugViewMode}");
+            }
             var destinationDesc = renderGraph.GetTextureDesc(source);
             destinationDesc.name = "_DynamicLightingVolumetricsTemp";
             destinationDesc.clearBuffer = false;
@@ -179,12 +201,15 @@ namespace AlpacaIT.DynamicLighting
             {
                 passData.source = source;
                 passData.destination = destination;
+                passData.depth = depth;
                 passData.material = _material;
                 passData.manager = manager;
                 passData.clipToWorld = clipToWorld;
                 passData.cameraPosition = camera.transform.position;
+                passData.debugViewMode = debugViewMode;
 
                 builder.UseTexture(source, AccessFlags.Read);
+                builder.UseTexture(depth, AccessFlags.Read);
                 builder.UseTexture(destination, AccessFlags.Write);
 
                 builder.SetRenderFunc((PassData data, UnsafeGraphContext context) =>
@@ -192,6 +217,7 @@ namespace AlpacaIT.DynamicLighting
                     var cmd = CommandBufferHelpers.GetNativeCommandBuffer(context.cmd);
                     data.material.SetMatrix(ClipToWorldId, data.clipToWorld);
                     data.material.SetVector(CameraPosId, data.cameraPosition);
+                    data.material.SetFloat(DebugViewModeId, data.debugViewMode);
                     data.manager.PostProcessingOnPreRenderCallback();
                     Blitter.BlitCameraTexture(cmd, data.source, data.destination, data.material, 0);
                 });
@@ -202,9 +228,11 @@ namespace AlpacaIT.DynamicLighting
             {
                 passData.source = destination;
                 passData.destination = source;
+                passData.depth = depth;
                 passData.manager = manager;
 
                 builder.UseTexture(destination, AccessFlags.Read);
+                builder.UseTexture(depth, AccessFlags.Read);
                 builder.UseTexture(source, AccessFlags.Write);
 
                 builder.SetRenderFunc((PassData data, UnsafeGraphContext context) =>
@@ -216,8 +244,6 @@ namespace AlpacaIT.DynamicLighting
             }
         }
 
-#if !UNITY_2023_2_OR_NEWER
-        // Legacy path for older Unity versions
         [System.Obsolete]
         public override void OnCameraSetup(CommandBuffer cmd, ref RenderingData renderingData)
         {
@@ -241,7 +267,16 @@ namespace AlpacaIT.DynamicLighting
 
             var manager = DynamicLightManager.Instance;
             if (manager == null || manager.postProcessingVolumetricLightsCount == 0)
+            {
+                if (debugLogging && (++_debugFrameCounter % 120) == 0)
+                {
+                    Debug.Log(
+                        $"DynamicLighting Volumetrics Execute: manager={(manager != null)}, " +
+                        $"lights={(manager != null ? manager.postProcessingVolumetricLightsCount : 0)}, " +
+                        $"debugViewMode={debugViewMode}");
+                }
                 return;
+            }
 
             CommandBuffer cmd = CommandBufferPool.Get();
             using (new ProfilingScope(cmd, _profilingSampler))
@@ -251,9 +286,20 @@ namespace AlpacaIT.DynamicLighting
                 // Calculate clip-to-world matrix
                 var viewMatrix = camera.worldToCameraMatrix;
                 var projectionMatrix = camera.projectionMatrix;
-                projectionMatrix = GL.GetGPUProjectionMatrix(projectionMatrix, true);
+                projectionMatrix = GL.GetGPUProjectionMatrix(projectionMatrix, false);
                 var clipToWorld = (projectionMatrix * viewMatrix).inverse;
                 _material.SetMatrix(ClipToWorldId, clipToWorld);
+                _material.SetVector(CameraPosId, camera.transform.position);
+                _material.SetFloat(DebugViewModeId, debugViewMode);
+
+                if (debugLogging && (++_debugFrameCounter % 120) == 0)
+                {
+                    var firstLightPos = manager.postProcessingVolumetricLightsCount > 0 ? manager.transform.position : Vector3.zero;
+                    Debug.Log(
+                        $"DynamicLighting Volumetrics Execute: lights={manager.postProcessingVolumetricLightsCount}, " +
+                        $"camera='{camera.name}', target={renderingData.cameraData.cameraTargetDescriptor.width}x{renderingData.cameraData.cameraTargetDescriptor.height}, " +
+                        $"debugViewMode={debugViewMode}, cameraPos={camera.transform.position}");
+                }
 
                 // Setup volumetric lights buffer
                 manager.PostProcessingOnPreRenderCallback();
@@ -272,7 +318,6 @@ namespace AlpacaIT.DynamicLighting
             context.ExecuteCommandBuffer(cmd);
             CommandBufferPool.Release(cmd);
         }
-#endif // !UNITY_2023_2_OR_NEWER
 
         public void Dispose()
         {

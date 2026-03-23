@@ -23,21 +23,7 @@ Shader "Hidden/DynamicLightingPostProcessing.URP"
             #include "Packages/com.unity.render-pipelines.core/Runtime/Utilities/Blit.hlsl"
             #include "Packages/de.alpacait.dynamiclighting/AlpacaIT.DynamicLighting/Shaders/DynamicLighting.hlsl"
 
-            float4x4 clipToWorld;
-            float3 _DL_WorldSpaceCameraPos;
-
-            float4 DL_ComputeClipSpacePosition(float2 positionNDC, float deviceDepth)
-            {
-                float4 positionCS = float4(positionNDC * 2.0 - 1.0, deviceDepth, 1.0);
-                return positionCS;
-            }
-
-            float3 DL_ComputeWorldSpacePosition(float2 positionNDC, float deviceDepth, float4x4 invViewProjMatrix)
-            {
-                float4 positionCS = DL_ComputeClipSpacePosition(positionNDC, deviceDepth);
-                float4 hpositionWS = mul(invViewProjMatrix, positionCS);
-                return hpositionWS.xyz / hpositionWS.w;
-            }
+            float _DL_DebugViewMode;
 
             // macros to name the recycled variables.
             #define light_volumetricRadius radiusSqr
@@ -62,7 +48,7 @@ Shader "Hidden/DynamicLightingPostProcessing.URP"
                 #endif
                 
                 // Use the same UV for world position reconstruction
-                float3 worldspace = DL_ComputeWorldSpacePosition(uv, depth, clipToWorld);
+                float3 worldspace = ComputeWorldSpacePosition(uv, depth, UNITY_MATRIX_I_VP);
                 // _BlitTexture is defined by Blit.hlsl
                 float4 color = SAMPLE_TEXTURE2D(_BlitTexture, sampler_LinearClamp, uv);
                 
@@ -70,13 +56,15 @@ Shader "Hidden/DynamicLightingPostProcessing.URP"
                 float4 fog_final = float4(0.0, 0.0, 0.0, 0.0);
                 float fog_final_t = 0.0;
                 
-                // DEBUG: Capture first light's data for debugging (outside loop)
-                float3 debug_light_pos = float3(0,0,0);
-                float debug_light_radius = 0;
-                float debug_dist_to_light = 0;
-                uint debug_volumetric_type = 0;
-                float debug_raw_t = 0;
-                float debug_closest_point_in_sphere = 0;
+                // Aggregate debug values across all volumetric lights, not just the first one.
+                float debug_min_dist01 = 1.0;
+                float debug_nearest_type01 = 0.0;
+                float debug_any_closest_point_in_sphere = 0.0;
+                float debug_max_raw_t = 0.0;
+                float debug_max_camera_to_world = 0.0;
+                float debug_any_intersection = 0.0;
+                float2 debug_first_light_screen_uv = float2(-10.0, -10.0);
+                float debug_first_light_in_front = 0.0;
                 
                 for (uint k = 0; k < dynamic_lights_count; k++)
                 {
@@ -87,39 +75,54 @@ Shader "Hidden/DynamicLightingPostProcessing.URP"
                     float3 fog_center = light.position;
                     float fog_radius = light.light_volumetricRadius;
                     uint volumetric_type = light.channel;
-                    
-                    // Capture debug values from first light
-                    if (k == 0) {
-                        debug_light_pos = fog_center;
-                        debug_light_radius = fog_radius;
-                        debug_dist_to_light = distance(worldspace, fog_center);
-                        debug_volumetric_type = volumetric_type;
+
+                    if (k == 0)
+                    {
+                        float4 lightClip = mul(UNITY_MATRIX_VP, float4(fog_center, 1.0));
+                        if (lightClip.w > 0.0001)
+                        {
+                            debug_first_light_in_front = 1.0;
+                            debug_first_light_screen_uv = lightClip.xy / lightClip.w * 0.5 + 0.5;
+                        }
+                    }
+                    float dist01 = saturate(distance(worldspace, fog_center) / max(fog_radius, 0.0001));
+                    if (dist01 < debug_min_dist01)
+                    {
+                        debug_min_dist01 = dist01;
+                        debug_nearest_type01 = saturate((float)volumetric_type / 4.0);
                     }
 
                     float t = 0.0;
+                    float intersected = 0.0;
 
                     if (volumetric_type == volumetric_type_sphere)
                     {
-                        // closest point to the fog center on line between camera and fragment.
-                        float3 fog_closest_point = nearest_point_on_finite_line(_DL_WorldSpaceCameraPos, worldspace, fog_center);
-                        
-                        // DEBUG: Check if closest point is in sphere
-                        float dist_closest_to_center = distance(fog_closest_point, fog_center);
-                        if (k == 0) {
-                            debug_closest_point_in_sphere = (dist_closest_to_center < fog_radius) ? 1.0 : 0.0;
-                        }
-                
-                        // does the camera to world line intersect the fog sphere?
-                        if (point_in_sphere(fog_closest_point, fog_center, fog_radius))
+                            float3 ray = worldspace - _WorldSpaceCameraPos;
+                        float rayLength = length(ray);
+
+                        if (rayLength > 0.0001)
                         {
-                            // distance from the closest point on the camera and fragment line to the fog center.
-                            float fog_closest_point_distance_to_interior_sphere = fog_radius - distance(fog_closest_point, fog_center);
-    
-                            // t is the volumetric non-linear color interpolant from 1.0 (center) to 0.0 (edge) of the sphere.
-                            t = fog_closest_point_distance_to_interior_sphere / fog_radius;
-                            
-                            // DEBUG: capture raw t
-                            if (k == 0) debug_raw_t = t;
+                            float3 rayDir = ray / rayLength;
+                            float3 oc = _WorldSpaceCameraPos - fog_center;
+                            float b = dot(oc, rayDir);
+                            float c = dot(oc, oc) - (fog_radius * fog_radius);
+                            float h = b * b - c;
+
+                            if (h >= 0.0)
+                            {
+                                float sqrtH = sqrt(h);
+                                float tEnter = max(0.0, -b - sqrtH);
+                                float tExit = min(rayLength, -b + sqrtH);
+                                float insideLength = tExit - tEnter;
+                                debug_any_closest_point_in_sphere = 1.0;
+
+                                if (insideLength > 0.0)
+                                {
+                                    intersected = 1.0;
+                                    // Normalize by diameter so a full center pass approaches 1.
+                                    t = saturate(insideLength / max(fog_radius * 2.0, 0.0001));
+                                }
+                            }
                         }
                     }
                     else if (volumetric_type == volumetric_type_box)
@@ -129,13 +132,16 @@ Shader "Hidden/DynamicLightingPostProcessing.URP"
                         float3 boxMax = light.position + light.light_volumetricRadius * light_volumetricScale;
 
                         // compute the ray direction (from camera to the current fragment).
-                        float3 rayDir = normalize(worldspace - _DL_WorldSpaceCameraPos);
+                        float3 rayDir = normalize(worldspace - _WorldSpaceCameraPos);
 
                         // get the distance to the current fragment in world space.
                         // tMax is limited by the maximum depth (geometry).
                         float tMin, tMax;
-                        float maxDepth = length(worldspace - _DL_WorldSpaceCameraPos);
-                        ray_box_intersection(_DL_WorldSpaceCameraPos, rayDir, boxMin, boxMax, tMin, tMax, maxDepth);
+                        float maxDepth = length(worldspace - _WorldSpaceCameraPos);
+                        if (ray_box_intersection(_WorldSpaceCameraPos, rayDir, boxMin, boxMax, tMin, tMax, maxDepth))
+                        {
+                            intersected = 1.0;
+                        }
 
                         // compute the length of the ray segment inside the box.
                         float ray_length_in_box = tMax - tMin;
@@ -146,15 +152,16 @@ Shader "Hidden/DynamicLightingPostProcessing.URP"
                     else if (volumetric_type == volumetric_type_cone_y || volumetric_type == volumetric_type_cone_z)
                     {
                         // compute the ray direction (from camera to the current fragment).
-                        float3 rayDir = normalize(worldspace - _DL_WorldSpaceCameraPos);
+                        float3 rayDir = normalize(worldspace - _WorldSpaceCameraPos);
 
                         // get the distance to the current fragment in world space.
                         float tMin, tMax;
-                        float maxDepth = length(worldspace - _DL_WorldSpaceCameraPos);
+                        float maxDepth = length(worldspace - _WorldSpaceCameraPos);
 
                         // Perform ray-cone intersection test
-                        if (ray_cone_intersection(_DL_WorldSpaceCameraPos, rayDir, light.position, light.forward, light_volumetricSpotAngle, light.light_volumetricRadius, tMin, tMax, maxDepth))
+                        if (ray_cone_intersection(_WorldSpaceCameraPos, rayDir, light.position, light.forward, light_volumetricSpotAngle, light.light_volumetricRadius, tMin, tMax, maxDepth))
                         {
+                            intersected = 1.0;
                             // compute the length of the ray segment inside the cone.
                             float ray_length_in_cone = tMax - tMin;
 
@@ -165,12 +172,15 @@ Shader "Hidden/DynamicLightingPostProcessing.URP"
 
                     // apply smoothstep for a gradual fog transition near the edges.
                     t = smoothstep(0.0, 1.0, t);
+                    debug_max_raw_t = max(debug_max_raw_t, t);
+                    debug_any_intersection = max(debug_any_intersection, intersected);
                                 
                     // apply the thickness to the fog that appears as a solid color.
                     t = saturate(t * light.light_volumetricThickness);
                         
                     // the distance from the camera to the world is used to make nearby geometry inside the fog visible.
-                    float camera_distance_from_world = distance(_DL_WorldSpaceCameraPos, worldspace) * light.volumetricVisibility;
+                    float camera_distance_from_world = distance(_WorldSpaceCameraPos, worldspace) * light.volumetricVisibility;
+                    debug_max_camera_to_world = max(debug_max_camera_to_world, camera_distance_from_world);
                         
                     // we only subtract from t so that naturally fading fog takes precedence.
                     t = min(t, camera_distance_from_world);
@@ -191,6 +201,55 @@ Shader "Hidden/DynamicLightingPostProcessing.URP"
                 // return float4(frac(_DL_WorldSpaceCameraPos * 0.1), 1);  // Test 17: Camera position (constant color)
                 // return float4(distance(_DL_WorldSpaceCameraPos, debug_light_pos) * 0.1, 0, 0, 1);  // Test 18: Camera-to-light dist
                 
+                uint debugViewMode = (uint)round(_DL_DebugViewMode);
+                if (debugViewMode == 1)
+                {
+                    return float4(depth, depth, depth, 1.0);
+                }
+                if (debugViewMode == 2)
+                {
+                    return float4(frac(abs(worldspace) * 0.05), 1.0);
+                }
+                if (debugViewMode == 3)
+                {
+                    float count01 = saturate(dynamic_lights_count / 8.0);
+                    return float4(count01, 0.0, 0.0, 1.0);
+                }
+                if (debugViewMode == 4)
+                {
+                    return float4(debug_min_dist01, debug_min_dist01, debug_min_dist01, 1.0);
+                }
+                if (debugViewMode == 5)
+                {
+                    return float4(debug_any_intersection, debug_any_intersection, debug_any_intersection, 1.0);
+                }
+                if (debugViewMode == 6)
+                {
+                    return float4(debug_max_raw_t, debug_max_raw_t, debug_max_raw_t, 1.0);
+                }
+                if (debugViewMode == 7)
+                {
+                    return float4(fog_final_t, fog_final_t, fog_final_t, 1.0);
+                }
+                if (debugViewMode == 8)
+                {
+                    float vis01 = saturate(debug_max_camera_to_world);
+                    return float4(vis01, vis01, vis01, 1.0);
+                }
+                if (debugViewMode == 9)
+                {
+                    return float4(fog_final.rgb, 1.0);
+                }
+                if (debugViewMode == 10)
+                {
+                    return float4(debug_nearest_type01, 0.0, 1.0 - debug_nearest_type01, 1.0);
+                }
+                if (debugViewMode == 11)
+                {
+                    float dotMask = 1.0 - saturate(distance(uv, debug_first_light_screen_uv) / 0.02);
+                    return float4(dotMask, debug_first_light_in_front, 0.0, 1.0);
+                }
+
                 // special blend that allows for fully opaque fog.
                 return lerp(color_screen(fog_final, color), fog_final, saturate(fog_final_t));
             }
