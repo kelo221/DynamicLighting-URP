@@ -36,11 +36,15 @@ namespace AlpacaIT.DynamicLighting
 #pragma warning restore CS0067
 
         private uint traces = 0;
+        private uint bounceTraces = 0;
         private uint optimizationLightsRemoved = 0;
         private bool bounceLightingInScene = false;
         private BenchmarkTimer totalTime;
         private BenchmarkTimer tracingTime;
         private BenchmarkTimer bounceTime;
+        private BenchmarkTimer bounceTracingTime;
+        private BenchmarkTimer bouncePostProcessTime;
+        private BenchmarkTimer bouncePackingTime;
         private BenchmarkTimer seamTime;
         private BenchmarkTimer optimizationTime;
         private BenchmarkTimer bvhTime;
@@ -91,11 +95,15 @@ namespace AlpacaIT.DynamicLighting
             log.AppendLine("--------------------------------");
 
             traces = 0;
+            bounceTraces = 0;
             optimizationLightsRemoved = 0;
             bounceLightingInScene = false;
             totalTime = new BenchmarkTimer();
             tracingTime = new BenchmarkTimer();
             bounceTime = new BenchmarkTimer();
+            bounceTracingTime = new BenchmarkTimer();
+            bouncePostProcessTime = new BenchmarkTimer();
+            bouncePackingTime = new BenchmarkTimer();
             seamTime = new BenchmarkTimer();
             optimizationTime = new BenchmarkTimer();
             bvhTime = new BenchmarkTimer();
@@ -299,7 +307,10 @@ namespace AlpacaIT.DynamicLighting
                 dynamicLightManager.Reload();
 
                 log.Append("Raycasts: ").Append(traces).Append(" (").Append(tracingTime.ToString()).AppendLine(")");
-                log.Append("Bounce Lighting: ").AppendLine(bounceTime.ToString());
+                log.Append("Bounce Lighting: ").Append(bounceTime.ToString()).Append(" (Rays: ").Append(bounceTraces).AppendLine(")");
+                log.Append("Bounce Trace Scheduling: ").AppendLine(bounceTracingTime.ToString());
+                log.Append("Bounce Post Process: ").AppendLine(bouncePostProcessTime.ToString());
+                log.Append("Bounce Packing: ").AppendLine(bouncePackingTime.ToString());
                 log.Append("Bounding Volume Hierarchy: ").AppendLine(bvhTime.ToString());
                 log.Append("Occlusion Bits Seams Padding: ").AppendLine(seamTime.ToString());
                 log.Append("Dynamic Triangles Optimization: ").Append(optimizationLightsRemoved).Append(" Light Sources Removed (").Append(optimizationTime.ToString()).AppendLine(")");
@@ -442,22 +453,37 @@ namespace AlpacaIT.DynamicLighting
                         var pixels_bounce_gc = GCHandle.Alloc(pixels_bounce, GCHandleType.Pinned);
                         var pixels_bounce_ptr = (float*)pixels_bounce_gc.AddrOfPinnedObject();
 
-                        // iterate over all triangles in the mesh.
-                        for (int i = 0; i < meshBuilder.triangleCount; i++)
+                        uint lightBounceTraces = 0;
+
+                        var bounceTriangleIndices = dynamic_triangles.GetTriangleIndicesByRaycastedLight(intersectingLightIndex);
+                        var bounceTriangleIndicesCount = bounceTriangleIndices.Count;
+
+                        // iterate over the triangles affected by the current light only.
+                        bounceTracingTime.Begin();
+                        for (int i = 0; i < bounceTriangleIndicesCount; i++)
                         {
-                            BounceTriangle(intersectingLightIndex, i, dynamic_triangles, pixels_bounce_ptr, meshBuilder);
+                            lightBounceTraces += BounceTriangle(intersectingLightIndex, bounceTriangleIndices[i], dynamic_triangles, pixels_bounce_ptr, meshBuilder);
                         }
 
                         // finish any remaining raycasting work.
                         callbackRaycastProcessor.Complete();
+                        bounceTracingTime.Stop();
+                        bounceTraces += lightBounceTraces;
 
-                        DilateBounceTexture(pixels_bounce_ptr, pixels_bounce);
-                        GaussianBlur.ApplyGaussianBlur(pixels_bounce_ptr, pixels_bounce, lightmapSize, 7, 5);
-
-                        // iterate over all triangles in the mesh.
-                        for (int i = 0; i < meshBuilder.triangleCount; i++)
+                        if (lightBounceTraces > 0)
                         {
-                            BuildBounceTextures(intersectingLightIndex, i, pixels_bounce_ptr, dynamic_triangles, meshBuilder);
+                            bouncePostProcessTime.Begin();
+                            DilateBounceTexture(pixels_bounce_ptr, pixels_bounce);
+                            GaussianBlur.ApplyGaussianBlur(pixels_bounce_ptr, pixels_bounce, lightmapSize, 7, 5);
+                            bouncePostProcessTime.Stop();
+
+                            // iterate over the triangles affected by the current light only.
+                            bouncePackingTime.Begin();
+                            for (int i = 0; i < bounceTriangleIndicesCount; i++)
+                            {
+                                BuildBounceTextures(intersectingLightIndex, bounceTriangleIndices[i], pixels_bounce_ptr, dynamic_triangles, meshBuilder);
+                            }
+                            bouncePackingTime.Stop();
                         }
 
                         // free the bounce lighting texture.
@@ -789,12 +815,15 @@ namespace AlpacaIT.DynamicLighting
             }
         }
 
-        private unsafe void BounceTriangle(int light_index, int triangle_index, DynamicTrianglesBuilder dynamic_triangles, float* pixels_bounce_ptr, MeshBuilder meshBuilder)
+        private unsafe uint BounceTriangle(int light_index, int triangle_index, DynamicTrianglesBuilder dynamic_triangles, float* pixels_bounce_ptr, MeshBuilder meshBuilder)
         {
             // lights have already been associated with triangles that can potentially be affected
             // by them during the direct illumination step. bounce light sources also include
             // triangles facing away from the light source which is very important as bounce
             // lighting can go anywhere within the light radius.
+            if (!dynamic_triangles.TriangleHasRaycastedLight(triangle_index, light_index))
+                return 0;
+
             var (v1, v2, v3) = meshBuilder.GetTriangleVertices(triangle_index);
 
             // calculate the triangle normal (this may fail when degenerate or very small).
@@ -804,17 +833,12 @@ namespace AlpacaIT.DynamicLighting
             var triangleNormalValid = UMath.IsNonZero(triangleNormalPtr);
 
             // skip degenerate triangles.
-            if (!triangleNormalValid) return;
+            if (!triangleNormalValid) return 0;
 
             // do some initial uv to 3d work here and also determine whether we can early out.
             var (t1, t2, t3) = meshBuilder.GetTriangleUv1(triangle_index);
             if (!MathEx.UvTo3dFastPrerequisite(t1, t2, t3, out float triangleSurfaceArea))
-                return;
-
-            // prepare to only process the current light source if it exists on the current triangle.
-            // this early-out is more expensive than the work above and delaying it here is faster.
-            if (!dynamic_triangles.TriangleHasRaycastedLight(triangle_index, light_index))
-                return;
+                return 0;
 
             // calculate the bounding box of the polygon in UV space.
             // we only have to raycast these pixels and can skip the rest.
@@ -854,10 +878,12 @@ namespace AlpacaIT.DynamicLighting
             var lightRadiusSqr = lightRadius * lightRadius;
             var lightBounceSamples = pointLight.lightBounceSamples;
             var lightBounceIntensity = pointLight.lightBounceIntensity;
+            bool useBounceCheckerboardSampling = tracerFlags.HasFlag(DynamicLightingTracerFlags.BounceCheckerboardSampling) && lightBounceSamples >= 32;
 
             // pre-computing part of this calculation:
             // var spreadRadius = 0.1f + i / (float)(lightBounceSamples - 1) * 0.9f;
             float spreadRadiusInverseSamples = 0.9f / (lightBounceSamples - 1);
+            uint localBounceTraces = 0;
 
             int ptr = 0;
             for (int y = minY; y <= maxY; y++)
@@ -866,6 +892,14 @@ namespace AlpacaIT.DynamicLighting
 
                 for (int x = minX; x <= maxX; x++)
                 {
+                    // For high-sample bounce lights, checkerboard the traced texels and let the
+                    // existing dilation + blur reconstruct the missing half.
+                    if (useBounceCheckerboardSampling && ((x + y) & 1) != 0)
+                    {
+                        ptr++;
+                        continue;
+                    }
+
                     // fetch the world position for the current uv coordinate.
                     world = uvWorldPositions[ptr++];
                     if (UMath.IsZero(worldPtr)) continue;
@@ -923,6 +957,7 @@ namespace AlpacaIT.DynamicLighting
                         raycastHandler.directions[i] = photonWorldMinusWorldWithNormalOffset; // is photonToWorldDirection here.
 
                         callbackRaycastProcessor.Add(raycastCommand, raycastHandler);
+                        localBounceTraces++;
                     }
 
                     raycastHandler.Ready();
@@ -930,6 +965,7 @@ namespace AlpacaIT.DynamicLighting
             }
 
             triangleUvTo3dStep.Dispose();
+            return localBounceTraces;
         }
 
         private unsafe void OptimizeTriangle(int triangle_index, uint* pixels_lightmap, DynamicTrianglesBuilder dynamic_triangles, MeshBuilder meshBuilder)

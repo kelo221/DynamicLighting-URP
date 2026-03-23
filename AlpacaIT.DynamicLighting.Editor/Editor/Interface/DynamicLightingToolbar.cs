@@ -43,6 +43,17 @@ namespace AlpacaIT.DynamicLighting.Editor
         }
     }
 
+    internal static class DynamicLightingBakeFlags
+    {
+        public static DynamicLightingTracerFlags Create(bool preview)
+        {
+            var flags = preview ? DynamicLightingTracerFlags.SkipAll : DynamicLightingTracerFlags.None;
+            if (DynamicLightingPreferences.BounceCheckerboardSampling)
+                flags |= DynamicLightingTracerFlags.BounceCheckerboardSampling;
+            return flags;
+        }
+    }
+
     internal class PreviewBakeButton : EditorToolbarButton
     {
         public const string ID = nameof(DynamicLightingToolbar) + "_" + nameof(BakeButton);
@@ -56,7 +67,7 @@ namespace AlpacaIT.DynamicLighting.Editor
 
             clicked += () =>
             {
-                DynamicLightManager.Instance.Raytrace(DynamicLightingPreferences.BakeResolution, DynamicLightingTracerFlags.SkipAll);
+                DynamicLightManager.Instance.Raytrace(DynamicLightingPreferences.BakeResolution, DynamicLightingBakeFlags.Create(preview: true));
             };
         }
     }
@@ -74,7 +85,7 @@ namespace AlpacaIT.DynamicLighting.Editor
 
             clicked += () =>
             {
-                DynamicLightManager.Instance.Raytrace(DynamicLightingPreferences.BakeResolution);
+                DynamicLightManager.Instance.Raytrace(DynamicLightingPreferences.BakeResolution, DynamicLightingBakeFlags.Create(preview: false));
             };
         }
     }
@@ -132,6 +143,13 @@ namespace AlpacaIT.DynamicLighting.Editor
                 {
                     DynamicLightingPreferences.DefaultToTransparency = !DynamicLightingPreferences.DefaultToTransparency;
                 }, DynamicLightingPreferences.DefaultToTransparency
+            );
+
+            addItem(
+                "Bake Uses Fast Bounce Sampling", () =>
+                {
+                    DynamicLightingPreferences.BounceCheckerboardSampling = !DynamicLightingPreferences.BounceCheckerboardSampling;
+                }, DynamicLightingPreferences.BounceCheckerboardSampling
             );
 
             menu.AddSeparator("");

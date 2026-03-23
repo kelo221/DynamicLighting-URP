@@ -14,6 +14,9 @@ namespace AlpacaIT.DynamicLighting
         /// <summary>Skip bounce lighting during the tracing of the scene.</summary>
         SkipBounceLighting = 1 << 0, // 1
 
+        /// <summary>Checkerboard high-sample bounce texels and reconstruct with blur.</summary>
+        BounceCheckerboardSampling = 1 << 1, // 2
+
         /// <summary>Skip all optional computations.</summary>
         SkipAll = SkipBounceLighting,
     }

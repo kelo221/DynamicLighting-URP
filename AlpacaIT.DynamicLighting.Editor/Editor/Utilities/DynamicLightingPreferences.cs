@@ -9,6 +9,7 @@ namespace AlpacaIT.DynamicLighting.Editor
         private const string BOUNCE_LIGHTING_BY_DEFAULT_PREF = PREF_ROOT + "defaultBounceLighting";
         private const string TRANSPARENCY_BY_DEFAULT_PREF = PREF_ROOT + "defaultTransparency";
         private const string BAKE_RESOLUTION_PREF = PREF_ROOT + "bakeResolution";
+        private const string BOUNCE_CHECKERBOARD_SAMPLING_PREF = PREF_ROOT + "bounceCheckerboardSampling";
 
         /// <summary>Do we default to creating all lights with bounce lighting?</summary>
         public static bool DefaultToBounceLighting
@@ -29,6 +30,13 @@ namespace AlpacaIT.DynamicLighting.Editor
         {
             get => EditorPrefs.GetInt(BAKE_RESOLUTION_PREF, 2048); // internal default setting
             set => EditorPrefs.SetInt(BAKE_RESOLUTION_PREF, value);
+        }
+
+        /// <summary>Use checkerboard sampling for high-sample bounce lights during baking.</summary>
+        public static bool BounceCheckerboardSampling
+        {
+            get => EditorPrefs.GetBool(BOUNCE_CHECKERBOARD_SAMPLING_PREF, true);
+            set => EditorPrefs.SetBool(BOUNCE_CHECKERBOARD_SAMPLING_PREF, value);
         }
     }
 }

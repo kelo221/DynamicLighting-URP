@@ -11,6 +11,8 @@ namespace AlpacaIT.DynamicLighting
     {
         private readonly DynamicLight[] pointLights;
         private readonly DynamicLightManager dynamicLightManager;
+        private static readonly IReadOnlyList<int> emptyTriangleIndices = new int[0];
+        private readonly Dictionary<uint, List<int>> trianglesByLight = new Dictionary<uint, List<int>>();
 
         private class DtbTriangleLightData
         {
@@ -101,7 +103,16 @@ namespace AlpacaIT.DynamicLighting
         /// <param name="raycastedLightIndex">The raycasted light index in the scene.</param>
         public void AddRaycastedLightToTriangle(int triangleIndex, int raycastedLightIndex)
         {
-            triangles[triangleIndex].lights.Add(new DtbTriangleLightData((uint)raycastedLightIndex));
+            var lightIndex = (uint)raycastedLightIndex;
+            triangles[triangleIndex].lights.Add(new DtbTriangleLightData(lightIndex));
+
+            if (!trianglesByLight.TryGetValue(lightIndex, out var triangleIndices))
+            {
+                triangleIndices = new List<int>();
+                trianglesByLight.Add(lightIndex, triangleIndices);
+            }
+
+            triangleIndices.Add(triangleIndex);
         }
 
         /// <summary>Removes the specified light index from a triangle.</summary>
@@ -136,6 +147,16 @@ namespace AlpacaIT.DynamicLighting
                 if (lights[i].dynamicLightIndex == raycastedLightIndex)
                     return i;
             return -1;
+        }
+
+        /// <summary>Gets the triangle indices associated with the specified light.</summary>
+        /// <param name="raycastedLightIndex">The raycasted light index in the scene.</param>
+        /// <returns>The triangle indices associated with the light.</returns>
+        public IReadOnlyList<int> GetTriangleIndicesByRaycastedLight(int raycastedLightIndex)
+        {
+            if (trianglesByLight.TryGetValue((uint)raycastedLightIndex, out var triangleIndices))
+                return triangleIndices;
+            return emptyTriangleIndices;
         }
 
         /// <summary>Gets the list of raycasted light indices associated with a triangle.</summary>
