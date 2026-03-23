@@ -816,7 +816,7 @@ struct DynamicTriangle
         // we are sample center, so it's the same as point sample.
         float2 pos = uv - 0.5;
         float2 f = frac(pos);
-        uint2 pos_top_left = floor(pos);
+        int2 pos_top_left = (int2)floor(pos);
 
         // we wish to do the following but with as few instructions as possible:
         //
@@ -834,14 +834,14 @@ struct DynamicTriangle
         for (int y = -1; y <= 2; y++)
         {
 #ifdef DYNAMIC_LIGHTING_SHADOW_SAMPLER_INDEX
-            uint index = (pos_top_left.y + y) * bounds.z + pos_top_left.x;
+            uint index = (uint)((pos_top_left.y + y) * (int)bounds.z + pos_top_left.x);
             [unroll]
             for (int x = -1; x <= 2; x++)
                 map[y + 1][x + 1] = DYNAMIC_LIGHTING_SHADOW_SAMPLER(index + x);
 #else
             [unroll]
             for (int x = -1; x <= 2; x++)
-                map[y + 1][x + 1] = DYNAMIC_LIGHTING_SHADOW_SAMPLER(uint2(pos_top_left.x + x, pos_top_left.y + y));
+                map[y + 1][x + 1] = DYNAMIC_LIGHTING_SHADOW_SAMPLER(uint2(max(pos_top_left.x + x, 0), max(pos_top_left.y + y, 0)));
 #endif
         }
         
@@ -899,15 +899,15 @@ struct DynamicTriangle
         // we are sample center, so it's the same as point sample.
         float2 pos = uv - 0.5;
         float2 f = frac(pos);
-        uint2 pos_top_left = floor(pos);
+        int2 pos_top_left = (int2)floor(pos);
 
         // offset the lightmap triangle uv to the top-left corner to read near zero, zero.
         pos_top_left -= bounds.xy;
         
-        float tl = shadow_sample(pos_top_left);
-        float tr = shadow_sample(pos_top_left + uint2(1, 0));
-        float bl = shadow_sample(pos_top_left + uint2(0, 1));
-        float br = shadow_sample(pos_top_left + uint2(1, 1));
+        float tl = shadow_sample(uint2(max(pos_top_left.x, 0), max(pos_top_left.y, 0)));
+        float tr = shadow_sample(uint2(max(pos_top_left.x + 1, 0), max(pos_top_left.y, 0)));
+        float bl = shadow_sample(uint2(max(pos_top_left.x, 0), max(pos_top_left.y + 1, 0)));
+        float br = shadow_sample(uint2(max(pos_top_left.x + 1, 0), max(pos_top_left.y + 1, 0)));
         
         // bilinear interpolation (simd).
         float2 c = lerp(float2(tl, bl), float2(tr, br), f.x);
@@ -940,7 +940,7 @@ struct DynamicTriangle
         // we are sample center, so it's the same as point sample.
         float2 pos = uv - 0.5;
         float2 f = frac(pos);
-        uint2 pos_top_left = floor(pos);
+        int2 pos_top_left = (int2)floor(pos);
         
         // offset the lightmap triangle uv to the top-left corner to read near zero, zero.
         pos_top_left -= bounds.xy;
@@ -950,11 +950,11 @@ struct DynamicTriangle
         uint bouncePixels = 32 / bounceBpp;
         uint bounceMask = (1 << bounceBpp) - 1; // the bitmask for the bits per pixel (e.g. 5 = 31).
         
-        uint index = pos_top_left.y * bounds.z + pos_top_left.x;
+        uint index = (uint)(pos_top_left.y * (int)bounds.z + pos_top_left.x);
         float tl   = bounce_sample(index    , bouncePixels, bounceBpp, bounceMask);
         float tr   = bounce_sample(index + 1, bouncePixels, bounceBpp, bounceMask);
         
-        index      = (pos_top_left.y + 1) * bounds.z + pos_top_left.x;
+        index      = (uint)((pos_top_left.y + 1) * (int)bounds.z + pos_top_left.x);
         float bl   = bounce_sample(index    , bouncePixels, bounceBpp, bounceMask);
         float br   = bounce_sample(index + 1, bouncePixels, bounceBpp, bounceMask);
         
