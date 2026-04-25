@@ -1,5 +1,6 @@
 ﻿using UnityEngine;
 using UnityEngine.Rendering;
+using GraphicsDeviceType = UnityEngine.Rendering.GraphicsDeviceType;
 
 namespace AlpacaIT.DynamicLighting
 {
@@ -45,10 +46,40 @@ namespace AlpacaIT.DynamicLighting
         /// <summary>Reference to <see cref="DynamicLightingResources.guassianBlurMaterial"/>.</summary>
         private Material shadowCameraGuassianBlurMaterial;
 
+        /// <summary>Command buffer used for shadow cubemap blur/copy work.</summary>
+        private CommandBuffer shadowCameraCommandBuffer;
+
         private bool shadowCameraReady;
         private const int shadowCameraResolution = 512; // anything above 1024 will fail.
-        private const int shadowCameraCubemapBudget = 16; // 300 is around the maximum, from there DX11 D3D error 0x80070057.
+        private const int defaultShadowCameraCubemapBudget = 16; // DX11-safe default.
+        private const int vulkanShadowCameraCubemapBudget = 64;
+        private int shadowCameraCubemapBudget = defaultShadowCameraCubemapBudget;
         private int shadowCameraCubemapIndex;
+        private Vector3 shadowCameraPriorityPosition;
+
+        private readonly System.Collections.Generic.List<ShadowCameraCandidate> shadowCameraCandidates =
+            new System.Collections.Generic.List<ShadowCameraCandidate>(vulkanShadowCameraCubemapBudget);
+        private static readonly System.Comparison<ShadowCameraCandidate> shadowCameraCandidateComparison =
+            CompareShadowCameraCandidates;
+
+        private struct ShadowCameraCandidate
+        {
+            public int shaderLightIndex;
+            public DynamicLight light;
+            public float priority;
+
+            public ShadowCameraCandidate(int shaderLightIndex, DynamicLight light, float priority)
+            {
+                this.shaderLightIndex = shaderLightIndex;
+                this.light = light;
+                this.priority = priority;
+            }
+        }
+
+        private static int CompareShadowCameraCandidates(ShadowCameraCandidate a, ShadowCameraCandidate b)
+        {
+            return a.priority.CompareTo(b.priority);
+        }
 
         /// <summary>Initialization of the DynamicLightManager.ShadowCamera partial class.</summary>
         private void ShadowCameraInitialize()
@@ -71,6 +102,7 @@ namespace AlpacaIT.DynamicLighting
 #endif
             shadowCameraDepthShader = dynamicLightingResources.shadowCameraDepthShader;
             shadowCameraGuassianBlurMaterial = dynamicLightingResources.guassianBlurMaterial;
+            shadowCameraCubemapBudget = GetShadowCameraCubemapBudget();
 
 #if UNITY_2021_3_OR_NEWER && !UNITY_2021_3_0 && !UNITY_2021_3_1 && !UNITY_2021_3_2 && !UNITY_2021_3_3 && !UNITY_2021_3_4 && !UNITY_2021_3_5 && !UNITY_2021_3_6 && !UNITY_2021_3_7 && !UNITY_2021_3_8 && !UNITY_2021_3_9 && !UNITY_2021_3_10 && !UNITY_2021_3_11 && !UNITY_2021_3_12 && !UNITY_2021_3_13 && !UNITY_2021_3_14 && !UNITY_2021_3_15 && !UNITY_2021_3_16 && !UNITY_2021_3_17 && !UNITY_2021_3_18 && !UNITY_2021_3_19 && !UNITY_2021_3_20 && !UNITY_2021_3_21 && !UNITY_2021_3_22 && !UNITY_2021_3_23 && !UNITY_2021_3_24 && !UNITY_2021_3_25 && !UNITY_2021_3_26 && !UNITY_2021_3_27 && !UNITY_2022_1 && !UNITY_2022_2 && !UNITY_2022_3_0 && !UNITY_2022_3_1 && !UNITY_2022_3_2 && !UNITY_2022_3_3 && !UNITY_2022_3_4 && !UNITY_2022_3_5
             shadowCameraRenderTextureDescriptor = new RenderTextureDescriptor(shadowCameraResolution, shadowCameraResolution, RenderTextureFormat.RGFloat, 16, 0, RenderTextureReadWrite.Linear);
@@ -121,6 +153,13 @@ namespace AlpacaIT.DynamicLighting
             Shader.SetGlobalTexture("shadow_cubemaps", shadowCameraCubemaps);
         }
 
+        private int GetShadowCameraCubemapBudget()
+        {
+            return SystemInfo.graphicsDeviceType == GraphicsDeviceType.Vulkan
+                ? vulkanShadowCameraCubemapBudget
+                : defaultShadowCameraCubemapBudget;
+        }
+
         /// <summary>Cleanup of the DynamicLightManager.ShadowCamera partial class.</summary>
         private void ShadowCameraCleanup()
         {
@@ -145,10 +184,23 @@ namespace AlpacaIT.DynamicLighting
                 shadowCameraCubemaps = null;
             }
 
+            if (shadowCameraCommandBuffer != null)
+            {
+                shadowCameraCommandBuffer.Release();
+                shadowCameraCommandBuffer = null;
+            }
+
             // clear additional references.
             shadowCameraTransform = null;
             shadowCamera = null;
             shadowCameraRenderTexture = null;
+            shadowCameraCandidates.Clear();
+        }
+
+        private void ShadowCameraBeginUpdate(Vector3 cameraPosition)
+        {
+            shadowCameraPriorityPosition = cameraPosition;
+            shadowCameraCandidates.Clear();
         }
 
         /// <summary>Called before the lights are processed for rendering.</summary>
@@ -180,7 +232,7 @@ namespace AlpacaIT.DynamicLighting
             shadowCameraRenderTexture = null;
         }
 
-        private unsafe void ShadowCameraProcessLight(ShaderDynamicLight* shaderLight, DynamicLight light)
+        private unsafe void ShadowCameraProcessLight(ShaderDynamicLight* shaderLight, DynamicLight light, int shaderLightIndex)
         {
             // integrated graphics does not render realtime shadows.
             if (runtimeQuality == DynamicLightingRuntimeQuality.IntegratedGraphics) return;
@@ -191,15 +243,27 @@ namespace AlpacaIT.DynamicLighting
             // the light must have realtime shadows enabled.
             if (light.lightShadows != DynamicLightShadowMode.RealtimeShadows) return;
 
-            // we ran out of cubemaps.
-            if (shadowCameraCubemapIndex >= shadowCameraCubemapBudget)
-                return;
-
             // if the light can not be seen by the camera we do not calculate/activate realtime shadows.
             if (!MathEx.CheckSphereIntersectsFrustum(cameraFrustumPlanes, shaderLight->position, light.lightRadius))
                 return;
 
-            ShadowCameraRenderLight(shaderLight, light);
+            float distanceSqr = (shaderLight->position - shadowCameraPriorityPosition).sqrMagnitude;
+            float priority = distanceSqr / Mathf.Max(shaderLight->radiusSqr, 0.0001f);
+            shadowCameraCandidates.Add(new ShadowCameraCandidate(shaderLightIndex, light, priority));
+        }
+
+        private unsafe void ShadowCameraRenderQueuedLights(ShaderDynamicLight* shaderLightsPtr)
+        {
+            if (shadowCameraCandidates.Count == 0) return;
+
+            shadowCameraCandidates.Sort(shadowCameraCandidateComparison);
+
+            int shadowLightCount = Mathf.Min(shadowCameraCandidates.Count, shadowCameraCubemapBudget);
+            for (int i = 0; i < shadowLightCount; i++)
+            {
+                var candidate = shadowCameraCandidates[i];
+                ShadowCameraRenderLight(&shaderLightsPtr[candidate.shaderLightIndex], candidate.light);
+            }
         }
 
         private unsafe void ShadowCameraRenderLight(ShaderDynamicLight* shaderLight, DynamicLight light)
@@ -226,14 +290,30 @@ namespace AlpacaIT.DynamicLighting
                 shadowCameraPipeline.Render();
 
                 RenderTexture rt = RenderTexture.GetTemporary(shadowCameraRenderTextureDescriptor);
-                Graphics.Blit(shadowCameraRenderTexture, rt, shadowCameraGuassianBlurMaterial, 0);
-                Graphics.Blit(rt, shadowCameraCubemaps, shadowCameraGuassianBlurMaterial, 1, (shadowCameraCubemapIndex * 6) + face);
+                ShadowCameraBlurFace(rt, face);
                 RenderTexture.ReleaseTemporary(rt);
             }
 
             // activate the cubemap on this light source.
             shaderLight->channel |= (uint)1 << 15; // shadow available bit
             shaderLight->shadowCubemapIndex = (uint)shadowCameraCubemapIndex++;
+        }
+
+        private void ShadowCameraBlurFace(RenderTexture temporaryRenderTexture, int face)
+        {
+            if (shadowCameraCommandBuffer == null)
+            {
+                shadowCameraCommandBuffer = new CommandBuffer
+                {
+                    name = "Dynamic Lighting Shadow Cubemap Blur"
+                };
+            }
+
+            shadowCameraCommandBuffer.Clear();
+            shadowCameraCommandBuffer.Blit(shadowCameraRenderTexture, temporaryRenderTexture, shadowCameraGuassianBlurMaterial, 0);
+            shadowCameraCommandBuffer.SetRenderTarget(shadowCameraCubemaps, 0, CubemapFace.Unknown, (shadowCameraCubemapIndex * 6) + face);
+            shadowCameraCommandBuffer.Blit(temporaryRenderTexture, BuiltinRenderTextureType.CurrentActive, shadowCameraGuassianBlurMaterial, 1);
+            Graphics.ExecuteCommandBuffer(shadowCameraCommandBuffer);
         }
     }
 }

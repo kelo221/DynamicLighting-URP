@@ -1109,6 +1109,7 @@ namespace AlpacaIT.DynamicLighting
 
             LightCookieUpdate();
             postProcessingVolumetricLightsCount = 0;
+            ShadowCameraBeginUpdate(camera.transform.position);
 
             var activeRealtimeLightsCount = activeRealtimeLights.Count;
             fixed (ShaderDynamicLight* shaderLightsPtr = shaderDynamicLights)
@@ -1127,7 +1128,7 @@ namespace AlpacaIT.DynamicLighting
 
                     if (lightAvailable)
                     {
-                        ShadowCameraProcessLight(shaderLight, light);
+                        ShadowCameraProcessLight(shaderLight, light, idx - 1);
                         LightCookieProcessLight(shaderLight, light);
                         PostProcessingProcessLight(shaderLight, light);
                     }
@@ -1144,11 +1145,13 @@ namespace AlpacaIT.DynamicLighting
 
                     if (lightAvailable)
                     {
-                        ShadowCameraProcessLight(shaderLight, light);
+                        ShadowCameraProcessLight(shaderLight, light, idx - 1);
                         LightCookieProcessLight(shaderLight, light);
                         PostProcessingProcessLight(shaderLight, light);
                     }
                 }
+
+                ShadowCameraRenderQueuedLights(shaderLightsPtr);
             }
 
             ShadowCameraPostUpdate();

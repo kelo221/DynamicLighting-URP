@@ -6,14 +6,16 @@ Shader "Hidden/Dynamic Lighting/GaussianBlur"
     Properties
     {
         _MainTex ("Texture", 2D) = "white" {}
+    }
 
-        CGINCLUDE
-        #include "UnityCG.cginc"
+    HLSLINCLUDE
+        #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
 
         static const float TWO_PI = 6.28319;
         static const float E = 2.71828;
 
-        sampler2D _MainTex;
+        TEXTURE2D(_MainTex);
+        SAMPLER(sampler_MainTex);
         float4 _MainTex_ST;
         float2 _MainTex_TexelSize;
         #define _KernelSize 3
@@ -28,8 +30,26 @@ Shader "Hidden/Dynamic Lighting/GaussianBlur"
 		    return (1 / sqrt(TWO_PI * sigmaSqu)) * pow(E, -(x * x) / (2 * sigmaSqu));
 	    }
 
-        ENDCG
-    }
+        struct Attributes
+        {
+            float4 vertex : POSITION;
+            float2 uv : TEXCOORD0;
+        };
+
+        struct Varyings
+        {
+            float4 positionCS : SV_POSITION;
+            float2 uv : TEXCOORD0;
+        };
+
+        Varyings vert(Attributes input)
+        {
+            Varyings output;
+            output.positionCS = TransformObjectToHClip(input.vertex.xyz);
+            output.uv = TRANSFORM_TEX(input.uv, _MainTex);
+            return output;
+        }
+    ENDHLSL
 
     SubShader
     {
@@ -40,13 +60,13 @@ Shader "Hidden/Dynamic Lighting/GaussianBlur"
         {
             Name "HorizontalPass"
 
-            CGPROGRAM
-            #pragma vertex vert_img
+            HLSLPROGRAM
+            #pragma vertex vert
             #pragma fragment frag
 
-            fixed4 frag (v2f_img i) : SV_Target
+            float4 frag (Varyings i) : SV_Target
             {
-				float3 col = float3(0.0, 0.0, 0.0);
+				float4 col = float4(0.0, 0.0, 0.0, 0.0);
 				float kernelSum = 0.0;
 
 				int upper = ((_KernelSize - 1) / 2);
@@ -56,26 +76,26 @@ Shader "Hidden/Dynamic Lighting/GaussianBlur"
 				{
 					float gauss = gaussian(x);
 					kernelSum += gauss;
-					col += gauss * tex2D(_MainTex, i.uv + fixed2(_MainTex_TexelSize.x * x, 0.0));
+					col += gauss * SAMPLE_TEXTURE2D(_MainTex, sampler_MainTex, i.uv + float2(_MainTex_TexelSize.x * x, 0.0));
 				}
 
 				col /= kernelSum;
-				return float4(col, 1.0);
+				return col;
             }
-            ENDCG
+            ENDHLSL
         }
 
         Pass
         {
             Name "VerticalPass"
 
-            CGPROGRAM
-            #pragma vertex vert_img
+            HLSLPROGRAM
+            #pragma vertex vert
             #pragma fragment frag
 
-            fixed4 frag (v2f_img i) : SV_Target
+            float4 frag (Varyings i) : SV_Target
             {
-				float3 col = float3(0.0, 0.0, 0.0);
+				float4 col = float4(0.0, 0.0, 0.0, 0.0);
 				float kernelSum = 0.0;
 
 				int upper = ((_KernelSize - 1) / 2);
@@ -85,13 +105,13 @@ Shader "Hidden/Dynamic Lighting/GaussianBlur"
 				{
 					float gauss = gaussian(y);
 					kernelSum += gauss;
-					col += gauss * tex2D(_MainTex, i.uv + fixed2(0.0, _MainTex_TexelSize.y * y));
+					col += gauss * SAMPLE_TEXTURE2D(_MainTex, sampler_MainTex, i.uv + float2(0.0, _MainTex_TexelSize.y * y));
 				}
 
 				col /= kernelSum;
-				return float4(col, 1.0);
+				return col;
             }
-            ENDCG
+            ENDHLSL
         }
     }
 }

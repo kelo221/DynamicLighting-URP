@@ -13,9 +13,11 @@ Shader "Hidden/Dynamic Lighting/ShadowDepth"
 
         Pass
         {
-            CGPROGRAM
+            HLSLPROGRAM
             #pragma vertex vert
             #pragma fragment frag
+
+            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
             
             struct appdata
             {
@@ -33,8 +35,8 @@ Shader "Hidden/Dynamic Lighting/ShadowDepth"
             v2f vert (appdata v)
             {
                 v2f o;
-                o.vertex = UnityObjectToClipPos(v.vertex);
-                o.world = mul(unity_ObjectToWorld, v.vertex).xyz;
+                o.vertex = TransformObjectToHClip(v.vertex.xyz);
+                o.world = TransformObjectToWorld(v.vertex.xyz);
                 return o;
             }
 
@@ -44,7 +46,7 @@ Shader "Hidden/Dynamic Lighting/ShadowDepth"
                 return float2(dist, dist * dist);
             }
 
-            ENDCG
+            ENDHLSL
         }
     }
     
@@ -55,11 +57,11 @@ Shader "Hidden/Dynamic Lighting/ShadowDepth"
 
         Pass
         {
-            CGPROGRAM
+            HLSLPROGRAM
             #pragma vertex vert
             #pragma fragment frag
             
-            #include "UnityCG.cginc"
+            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
 
             struct appdata
             {
@@ -74,22 +76,23 @@ Shader "Hidden/Dynamic Lighting/ShadowDepth"
                 float3 world : TEXCOORD1;
             };
 
-            sampler2D _MainTex;
+            TEXTURE2D(_MainTex);
+            SAMPLER(sampler_MainTex);
             float4 _MainTex_ST;
             float dynamic_lighting_shadow_depth_light_radius;
             
             v2f vert (appdata v)
             {
                 v2f o;
-                o.vertex = UnityObjectToClipPos(v.vertex);
-                o.world = mul(unity_ObjectToWorld, v.vertex).xyz;
+                o.vertex = TransformObjectToHClip(v.vertex.xyz);
+                o.world = TransformObjectToWorld(v.vertex.xyz);
                 o.uv0 = TRANSFORM_TEX(v.uv0, _MainTex);
                 return o;
             }
 
             float2 frag (v2f i) : SV_Target
             {
-                fixed4 col = tex2D(_MainTex, i.uv0);
+                float4 col = SAMPLE_TEXTURE2D(_MainTex, sampler_MainTex, i.uv0);
                 if (col.a > 0.5)
                 {
                     float dist = distance(_WorldSpaceCameraPos, i.world) / dynamic_lighting_shadow_depth_light_radius;
@@ -102,7 +105,7 @@ Shader "Hidden/Dynamic Lighting/ShadowDepth"
                 }
             }
 
-            ENDCG
+            ENDHLSL
         }
     }
 
@@ -113,11 +116,11 @@ Shader "Hidden/Dynamic Lighting/ShadowDepth"
 
         Pass
         {
-            CGPROGRAM
+            HLSLPROGRAM
             #pragma vertex vert
             #pragma fragment frag
             
-            #include "UnityCG.cginc"
+            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
 
             struct appdata
             {
@@ -132,22 +135,23 @@ Shader "Hidden/Dynamic Lighting/ShadowDepth"
                 float3 world : TEXCOORD1;
             };
 
-            sampler2D _MainTex;
+            TEXTURE2D(_MainTex);
+            SAMPLER(sampler_MainTex);
             float4 _MainTex_ST;
             float dynamic_lighting_shadow_depth_light_radius;
             
             v2f vert (appdata v)
             {
                 v2f o;
-                o.vertex = UnityObjectToClipPos(v.vertex);
-                o.world = mul(unity_ObjectToWorld, v.vertex).xyz;
+                o.vertex = TransformObjectToHClip(v.vertex.xyz);
+                o.world = TransformObjectToWorld(v.vertex.xyz);
                 o.uv0 = TRANSFORM_TEX(v.uv0, _MainTex);
                 return o;
             }
 
             float2 frag (v2f i) : SV_Target
             {
-                fixed4 col = tex2D(_MainTex, i.uv0);
+                float4 col = SAMPLE_TEXTURE2D(_MainTex, sampler_MainTex, i.uv0);
                 if (col.a > 0.5)
                 {
                     float dist = distance(_WorldSpaceCameraPos, i.world) / dynamic_lighting_shadow_depth_light_radius;
@@ -160,7 +164,7 @@ Shader "Hidden/Dynamic Lighting/ShadowDepth"
                 }
             }
 
-            ENDCG
+            ENDHLSL
         }
     }
     Fallback "Diffuse"
