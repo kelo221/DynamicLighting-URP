@@ -11,8 +11,7 @@ Shader "Hidden/Dynamic Lighting/GaussianBlur"
     HLSLINCLUDE
         #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
 
-        static const float TWO_PI = 6.28319;
-        static const float E = 2.71828;
+        static const float DYNAMIC_LIGHTING_TWO_PI = 6.28319;
 
         TEXTURE2D(_MainTex);
         SAMPLER(sampler_MainTex);
@@ -27,7 +26,7 @@ Shader "Hidden/Dynamic Lighting/GaussianBlur"
 	    float gaussian(int x)
 	    {
 		    float sigmaSqu = _Spread * _Spread;
-		    return (1 / sqrt(TWO_PI * sigmaSqu)) * pow(E, -(x * x) / (2 * sigmaSqu));
+		    return (1 / sqrt(DYNAMIC_LIGHTING_TWO_PI * sigmaSqu)) * exp(-(x * x) / (2 * sigmaSqu));
 	    }
 
         struct Attributes
