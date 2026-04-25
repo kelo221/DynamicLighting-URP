@@ -35,7 +35,7 @@ namespace AlpacaIT.DynamicLighting.Editor
         /// <summary>Use checkerboard sampling for high-sample bounce lights during baking.</summary>
         public static bool BounceCheckerboardSampling
         {
-            get => EditorPrefs.GetBool(BOUNCE_CHECKERBOARD_SAMPLING_PREF, true);
+            get => EditorPrefs.GetBool(BOUNCE_CHECKERBOARD_SAMPLING_PREF, false);
             set => EditorPrefs.SetBool(BOUNCE_CHECKERBOARD_SAMPLING_PREF, value);
         }
     }

@@ -477,11 +477,12 @@ namespace AlpacaIT.DynamicLighting
                             GaussianBlur.ApplyGaussianBlur(pixels_bounce_ptr, pixels_bounce, lightmapSize, 7, 5);
                             bouncePostProcessTime.Stop();
 
-                            // iterate over the triangles affected by the current light only.
+                            // Iterate over all triangles so blurred bounce can be stored wherever
+                            // it landed, matching the original BIRP bake behavior.
                             bouncePackingTime.Begin();
-                            for (int i = 0; i < bounceTriangleIndicesCount; i++)
+                            for (int i = 0; i < meshBuilder.triangleCount; i++)
                             {
-                                BuildBounceTextures(intersectingLightIndex, bounceTriangleIndices[i], pixels_bounce_ptr, dynamic_triangles, meshBuilder);
+                                BuildBounceTextures(intersectingLightIndex, i, pixels_bounce_ptr, dynamic_triangles, meshBuilder);
                             }
                             bouncePackingTime.Stop();
                         }
