@@ -4,6 +4,9 @@ Shader "Hidden/Dynamic Lighting/PhotonCube"
     {
         _Color("Main Color", Color) = (1,1,1,1)
         _MainTex("Base (RGB)", 2D) = "white" {}
+        _BaseColor("Base Color", Color) = (1,1,1,1)
+        _BaseMap("Base Map", 2D) = "white" {}
+        _Cutoff("Alpha Cutoff", Range(0,1)) = 0.5
     }
 
     SubShader
@@ -76,6 +79,82 @@ Shader "Hidden/Dynamic Lighting/PhotonCube"
 
             ENDHLSL
         }
+
+        Pass
+        {
+            Name "PhotonCubeAlpha"
+            Tags { "LightMode" = "UniversalForward" }
+
+            HLSLPROGRAM
+            #pragma vertex vert
+            #pragma fragment frag
+
+            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
+            #include "Packages/de.alpacait.dynamiclighting/AlpacaIT.DynamicLighting/Shaders/Internal/Common.hlsl"
+
+            struct appdata
+            {
+                float4 vertex : POSITION;
+                float3 normal : NORMAL;
+                float2 uv0 : TEXCOORD0;
+            };
+
+            struct v2f
+            {
+                float4 vertex : SV_POSITION;
+                float3 world : TEXCOORD0;
+                float3 normal : TEXCOORD1;
+                float2 uv0 : TEXCOORD2;
+                float2 uvBase : TEXCOORD3;
+            };
+
+            sampler2D _MainTex;
+            float4 _MainTex_ST;
+            float4 _MainTex_TexelSize;
+            sampler2D _BaseMap;
+            float4 _BaseMap_ST;
+            float4 _BaseMap_TexelSize;
+            float4 _Color;
+            float4 _BaseColor;
+            float _Cutoff;
+
+            v2f vert (appdata v)
+            {
+                v2f o;
+                VertexPositionInputs vertexInput = GetVertexPositionInputs(v.vertex.xyz);
+                VertexNormalInputs normalInput = GetVertexNormalInputs(v.normal);
+
+                o.vertex = vertexInput.positionCS;
+                o.world = vertexInput.positionWS;
+                o.normal = normalInput.normalWS;
+                o.uv0 = TRANSFORM_TEX(v.uv0, _MainTex);
+                o.uvBase = TRANSFORM_TEX(v.uv0, _BaseMap);
+                return o;
+            }
+
+            float2 frag (v2f i) : SV_Target
+            {
+                float2 result;
+
+                float3 light_direction = _WorldSpaceCameraPos - i.world;
+                light_direction = normalize(light_direction);
+
+                float light_distance = distance(_WorldSpaceCameraPos, i.world);
+                float bias = max(light_distance * 0.001, 0.001);
+                light_distance = distance(_WorldSpaceCameraPos, i.world + light_direction * bias + i.normal * bias);
+
+                result.r = light_distance;
+                result.g = asfloat(minivector3(i.normal));
+
+                float mainAlpha = texture_alpha_sample_gaussian5(_MainTex, _MainTex_TexelSize, i.uv0) * _Color.a;
+                float baseAlpha = texture_alpha_sample_gaussian5(_BaseMap, _BaseMap_TexelSize, i.uvBase) * _BaseColor.a;
+                clip(min(mainAlpha, baseAlpha) - _Cutoff);
+
+                return result;
+            }
+
+            ENDHLSL
+        }
     }
 
     SubShader
@@ -108,11 +187,18 @@ Shader "Hidden/Dynamic Lighting/PhotonCube"
                 float3 world : TEXCOORD0;
                 float3 normal : TEXCOORD1;
                 float2 uv0 : TEXCOORD2;
+                float2 uvBase : TEXCOORD3;
             };
 
             sampler2D _MainTex;
             float4 _MainTex_ST;
             float4 _MainTex_TexelSize;
+            sampler2D _BaseMap;
+            float4 _BaseMap_ST;
+            float4 _BaseMap_TexelSize;
+            float4 _Color;
+            float4 _BaseColor;
+            float _Cutoff;
 
             v2f vert (appdata v)
             {
@@ -124,6 +210,7 @@ Shader "Hidden/Dynamic Lighting/PhotonCube"
                 o.world = vertexInput.positionWS;
                 o.normal = normalInput.normalWS;
                 o.uv0 = TRANSFORM_TEX(v.uv0, _MainTex);
+                o.uvBase = TRANSFORM_TEX(v.uv0, _BaseMap);
                 return o;
             }
 
@@ -151,8 +238,10 @@ Shader "Hidden/Dynamic Lighting/PhotonCube"
                 result.g = asfloat(minivector3(i.normal));
 
                 // discard fragments for transparent textures so that light can shine through it.
-                float textureAlpha = texture_alpha_sample_gaussian5(_MainTex, _MainTex_TexelSize, i.uv0);
-                if (textureAlpha > 0.5)
+                float mainAlpha = texture_alpha_sample_gaussian5(_MainTex, _MainTex_TexelSize, i.uv0) * _Color.a;
+                float baseAlpha = texture_alpha_sample_gaussian5(_BaseMap, _BaseMap_TexelSize, i.uvBase) * _BaseColor.a;
+                float textureAlpha = min(mainAlpha, baseAlpha);
+                if (textureAlpha > _Cutoff)
                 {
                     return result;
                 }
@@ -199,11 +288,18 @@ Shader "Hidden/Dynamic Lighting/PhotonCube"
                 float3 world : TEXCOORD0;
                 float3 normal : TEXCOORD1;
                 float2 uv0 : TEXCOORD2;
+                float2 uvBase : TEXCOORD3;
             };
 
             sampler2D _MainTex;
             float4 _MainTex_ST;
             float4 _MainTex_TexelSize;
+            sampler2D _BaseMap;
+            float4 _BaseMap_ST;
+            float4 _BaseMap_TexelSize;
+            float4 _Color;
+            float4 _BaseColor;
+            float _Cutoff;
 
             v2f vert (appdata v)
             {
@@ -215,6 +311,7 @@ Shader "Hidden/Dynamic Lighting/PhotonCube"
                 o.world = vertexInput.positionWS;
                 o.normal = normalInput.normalWS;
                 o.uv0 = TRANSFORM_TEX(v.uv0, _MainTex);
+                o.uvBase = TRANSFORM_TEX(v.uv0, _BaseMap);
                 return o;
             }
 
@@ -242,8 +339,10 @@ Shader "Hidden/Dynamic Lighting/PhotonCube"
                 result.g = asfloat(minivector3(i.normal));
 
                 // discard fragments for transparent textures so that light can shine through it.
-                float textureAlpha = texture_alpha_sample_gaussian5(_MainTex, _MainTex_TexelSize, i.uv0);
-                if (textureAlpha > 0.5)
+                float mainAlpha = texture_alpha_sample_gaussian5(_MainTex, _MainTex_TexelSize, i.uv0) * _Color.a;
+                float baseAlpha = texture_alpha_sample_gaussian5(_BaseMap, _BaseMap_TexelSize, i.uvBase) * _BaseColor.a;
+                float textureAlpha = min(mainAlpha, baseAlpha);
+                if (textureAlpha > _Cutoff)
                 {
                     return result;
                 }

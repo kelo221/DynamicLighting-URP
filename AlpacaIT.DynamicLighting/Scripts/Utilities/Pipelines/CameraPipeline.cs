@@ -13,9 +13,6 @@ namespace AlpacaIT.DynamicLighting
         /// <summary>The <see cref="Camera"/> used for capturing replacement shader frames in the scene.</summary>
         private Camera camera;
 
-        /// <summary>The replacement material used on all objects when this camera renders.</summary>
-        private Material replacementMaterial;
-
         /// <summary>Requests rendering a single camera on the render pipeline.</summary>
         private UnityEngine.Rendering.Universal.UniversalRenderPipeline.SingleCameraRequest singleCameraRequest = new UnityEngine.Rendering.Universal.UniversalRenderPipeline.SingleCameraRequest();
 
@@ -37,7 +34,6 @@ namespace AlpacaIT.DynamicLighting
         public CameraPipeline(Camera camera, Material replacementMaterial)
         {
             this.camera = camera;
-            this.replacementMaterial = replacementMaterial;
             replacementShaderPass = new ReplacementShaderPass(replacementMaterial);
             cameraUniversalAdditionalCameraData = UnityEngine.Rendering.Universal.CameraExtensions.GetUniversalAdditionalCameraData(camera);
         }
@@ -82,8 +78,8 @@ namespace AlpacaIT.DynamicLighting
 
         public class ReplacementShaderPass : UnityEngine.Rendering.Universal.ScriptableRenderPass
         {
-            /// <summary>The replacement material used on all objects when this camera renders.</summary>
-            private Material replacementMaterial;
+            /// <summary>The replacement shader used on all objects when this camera renders.</summary>
+            private Shader replacementShader;
 
             private static readonly System.Collections.Generic.List<UnityEngine.Rendering.ShaderTagId> m_ShaderTagIdList = new System.Collections.Generic.List<UnityEngine.Rendering.ShaderTagId>
             {
@@ -91,9 +87,17 @@ namespace AlpacaIT.DynamicLighting
                 new UnityEngine.Rendering.ShaderTagId("SRPDefaultUnlit")
             };
 
+            private const int alphaTestRenderQueue = (int)UnityEngine.Rendering.RenderQueue.AlphaTest;
+
+            private static readonly UnityEngine.Rendering.RenderQueueRange opaqueRenderQueueRange =
+                new UnityEngine.Rendering.RenderQueueRange(UnityEngine.Rendering.RenderQueueRange.minimumBound, alphaTestRenderQueue - 1);
+
+            private static readonly UnityEngine.Rendering.RenderQueueRange alphaRenderQueueRange =
+                new UnityEngine.Rendering.RenderQueueRange(alphaTestRenderQueue, UnityEngine.Rendering.RenderQueueRange.maximumBound);
+
             public ReplacementShaderPass(Material replacementMaterial)
             {
-                this.replacementMaterial = replacementMaterial;
+                this.replacementShader = replacementMaterial.shader;
                 renderPassEvent = UnityEngine.Rendering.Universal.RenderPassEvent.AfterRenderingOpaques;
             }
 
@@ -107,34 +111,47 @@ namespace AlpacaIT.DynamicLighting
                     var lightData = frameContext.Get<UnityEngine.Rendering.Universal.UniversalLightData>();
                     var resourceData = frameContext.Get<UnityEngine.Rendering.Universal.UniversalResourceData>();
 
-                    // setup drawing and filtering.
                     var sortingCriteria = cameraData.defaultOpaqueSortFlags;
-                    var drawingSettings = UnityEngine.Rendering.Universal.RenderingUtils.CreateDrawingSettings(m_ShaderTagIdList, renderingData, cameraData, lightData, sortingCriteria);
-                    drawingSettings.overrideMaterial = replacementMaterial;
-                    drawingSettings.overrideMaterialPassIndex = 0;
-
-                    var filteringSettings = new UnityEngine.Rendering.FilteringSettings(UnityEngine.Rendering.RenderQueueRange.opaque);
-
-                    // Create renderer list params and handle.
-                    var rendererListParams = new UnityEngine.Rendering.RendererListParams(renderingData.cullResults, drawingSettings, filteringSettings);
-                    passData.rendererListHandle = renderGraph.CreateRendererList(rendererListParams);
+                    passData.opaqueRendererListHandle = CreateRendererList(renderGraph, renderingData, cameraData, lightData, sortingCriteria, opaqueRenderQueueRange, 0);
+                    passData.alphaRendererListHandle = CreateRendererList(renderGraph, renderingData, cameraData, lightData, sortingCriteria, alphaRenderQueueRange, 1);
 
                     // Declare usage and attachments (draw to active camera buffers).
-                    builder.UseRendererList(passData.rendererListHandle);
+                    builder.UseRendererList(passData.opaqueRendererListHandle);
+                    builder.UseRendererList(passData.alphaRendererListHandle);
                     builder.SetRenderAttachment(resourceData.activeColorTexture, 0);
                     builder.SetRenderAttachmentDepth(resourceData.activeDepthTexture, UnityEngine.Rendering.RenderGraphModule.AccessFlags.Write);
 
                     // Define the execute function (static to avoid allocations).
                     builder.SetRenderFunc(static (PassData data, UnityEngine.Rendering.RenderGraphModule.RasterGraphContext rgContext) =>
                     {
-                        rgContext.cmd.DrawRendererList(data.rendererListHandle);
+                        rgContext.cmd.DrawRendererList(data.opaqueRendererListHandle);
+                        rgContext.cmd.DrawRendererList(data.alphaRendererListHandle);
                     });
                 }
             }
 
+            private UnityEngine.Rendering.RenderGraphModule.RendererListHandle CreateRendererList(
+                UnityEngine.Rendering.RenderGraphModule.RenderGraph renderGraph,
+                UnityEngine.Rendering.Universal.UniversalRenderingData renderingData,
+                UnityEngine.Rendering.Universal.UniversalCameraData cameraData,
+                UnityEngine.Rendering.Universal.UniversalLightData lightData,
+                UnityEngine.Rendering.SortingCriteria sortingCriteria,
+                UnityEngine.Rendering.RenderQueueRange renderQueueRange,
+                int replacementPassIndex)
+            {
+                var drawingSettings = UnityEngine.Rendering.Universal.RenderingUtils.CreateDrawingSettings(m_ShaderTagIdList, renderingData, cameraData, lightData, sortingCriteria);
+                drawingSettings.overrideShader = replacementShader;
+                drawingSettings.overrideShaderPassIndex = replacementPassIndex;
+
+                var filteringSettings = new UnityEngine.Rendering.FilteringSettings(renderQueueRange);
+                var rendererListParams = new UnityEngine.Rendering.RendererListParams(renderingData.cullResults, drawingSettings, filteringSettings);
+                return renderGraph.CreateRendererList(rendererListParams);
+            }
+
             private class PassData
             {
-                public UnityEngine.Rendering.RenderGraphModule.RendererListHandle rendererListHandle;
+                public UnityEngine.Rendering.RenderGraphModule.RendererListHandle opaqueRendererListHandle;
+                public UnityEngine.Rendering.RenderGraphModule.RendererListHandle alphaRendererListHandle;
             }
         }
     }
